@@ -1,0 +1,15 @@
+torch>=2.1.0
+torchvision>=0.16.0
+open-clip-torch>=2.24.0
+numpy
+pillow
+omegaconf
+pyyaml
+scikit-learn
+matplotlib
+seaborn
+pandas
+tqdm
+tensorboard
+umap-learn
+pytest
