@@ -1,8 +1,8 @@
 # Devang's Midterm Plan — Visual Modality (Image Evidence)
 
-> **Role**: Evaluate image evidence for claim verification using CLIP
-> **Model**: CLIP (ViT-L/14) — cosine similarity between claim and image evidence
-> **Question**: "How useful is image evidence alone for verifying textual claims?"
+> **Role**: Retrieve and verify image evidence for claim verification using CLIP
+> **Model**: CLIP (ViT-L/14) — used for both retrieval (find relevant images) and verification (score claim-image consistency)
+> **Question**: "Can CLIP retrieve the right image evidence AND use it to verify claims?"
 
 ---
 
@@ -32,16 +32,23 @@ These are needed by BOTH reports and should be done together or divided early.
 
 #### Code & Experiments
 
-- [ ] **CLIP Baseline Implementation**
-  - Load pre-trained CLIP ViT-L/14 (frozen, no fine-tuning)
-  - For each (claim, candidate_images) pair:
+- [ ] **Phase 1: CLIP Image Retrieval**
+  - Pre-compute CLIP image embeddings for the full WebQA image pool (~390K images)
+  - For each claim:
     - Encode claim text via CLIP text encoder
-    - Encode each candidate image via CLIP image encoder
-    - Compute cosine similarity scores
+    - Compute cosine similarity against all pre-computed image embeddings
+    - Retrieve top-K images (K=5, 10, 20) ranked by similarity
+  - Evaluate retrieval quality: does the correct evidence image appear in top-K?
+  - Metrics: Recall@5, Recall@10, Recall@20
+
+- [ ] **Phase 2: CLIP Verification (on retrieved evidence)**
+  - For each (claim, retrieved_images) pair:
+    - Compute cosine similarity between claim and each retrieved image
     - Use max/mean similarity as verification score
   - Map similarity scores to 3-way verdict (True / False / Unverifiable)
     - Approach 1: Threshold-based (tune thresholds on val set)
     - Approach 2: Train a small classifier (MLP) on top of similarity features
+  - Also run verification with oracle (gold) evidence for comparison — this isolates retrieval errors from verification errors
 
 - [ ] **ViT Baseline (optional, if time permits)**
   - Fine-tune ViT-B/16 on images only (no claim text)
@@ -49,20 +56,29 @@ These are needed by BOTH reports and should be done together or divided early.
   - Useful as a comparison point: "ViT alone can't do anything, CLIP at least captures claim-image relationship"
 
 - [ ] **Ablation / Analysis**
-  - Break down performance by misinformation type:
+  - **Retrieval analysis:**
+    - Recall@K curves (K=5, 10, 20) — how often does the correct image appear in top-K?
+    - Retrieval failure analysis: what types of claims cause CLIP to retrieve wrong images?
+    - Retrieval quality by misinformation type (e.g., visual contradictions may confuse retrieval)
+  - **Verification analysis (breakdown by misinformation type):**
     - How does CLIP perform on visual contradictions (swapped images)?
     - How does CLIP perform on text contradictions (claim is wrong, image is fine)?
     - How does CLIP perform on temporal mismatches?
+  - **End-to-end vs oracle comparison:**
+    - Verification with retrieved evidence vs verification with gold evidence
+    - This isolates how much performance loss comes from retrieval errors vs verification errors
   - Qualitative examples:
-    - Success cases: where CLIP correctly flags a mismatched image
-    - Failure cases: where CLIP gives high similarity despite the claim being false
-  - Confusion matrix (3-way: True/False/Unverifiable)
+    - Success cases: where CLIP correctly retrieves AND flags a mismatched image
+    - Failure cases: retrieval failures (wrong image retrieved) vs verification failures (right image, wrong verdict)
+  - Confusion matrix (3-way: True/False/Unverifiable) — for both oracle and end-to-end
   - Similarity score distributions for true vs false claims
 
 - [ ] **Generate Figures**
+  - Recall@K curve (K=1, 5, 10, 20)
   - CLIP similarity score histogram (true claims vs false claims)
-  - Confusion matrix
+  - Confusion matrix (oracle evidence + end-to-end)
   - Per-class performance bar chart (Macro F1, accuracy per class)
+  - Oracle vs end-to-end performance comparison bar chart
   - Qualitative examples: 2-3 success cases, 2-3 failure cases with images
   - Optional: t-SNE/UMAP of CLIP embeddings colored by label
 
@@ -77,41 +93,51 @@ These are needed by BOTH reports and should be done together or divided early.
     - Dual encoder: ViT-L/14 for images, Transformer for text
     - How cosine similarity in shared embedding space works
     - Why CLIP is appropriate: it's the strongest off-the-shelf claim-image matching model
-  - Explain how you adapted CLIP for verification:
-    - Similarity score computation
+  - Explain two-phase pipeline:
+    - **Phase 1 — Retrieval**: Pre-compute image embeddings for ~390K images, retrieve top-K by cosine similarity
+    - **Phase 2 — Verification**: Score claim against retrieved images, map to 3-way verdict
     - Threshold tuning or classifier on top
     - Pre-training data (LAION/OpenAI) and its relevance to web-sourced claims
   - If ViT baseline was run, describe it briefly as a comparison
 
 - [ ] **Section 5.2 — Experiments & Evaluation (0.5 page)**
   - Train/val/test split sizes and strategy
+  - Image pool size (~390K images) and indexing strategy
   - Hardware: GPU type, memory
   - Software: PyTorch, transformers/open_clip library version
-  - Hyperparameters: CLIP model variant, similarity thresholds, classifier LR/epochs if applicable
-  - Metrics: Macro F1, Accuracy, per-class F1, Recall@K for evidence retrieval
+  - Hyperparameters: CLIP model variant, K values for retrieval, similarity thresholds, classifier LR/epochs if applicable
+  - Retrieval metrics: Recall@5, Recall@10, Recall@20
+  - Verification metrics: Macro F1, Accuracy, per-class F1
   - No data augmentation on image side (frozen CLIP)
 
 - [ ] **Section 5.3 — Results (1 page)**
-  - Summary table: CLIP performance across metrics
+  - Retrieval results: Recall@K table across K values
+  - Verification results: CLIP performance across metrics (with oracle evidence AND with retrieved evidence)
+  - End-to-end vs oracle comparison table — quantify performance drop from retrieval errors
   - If ViT baseline exists: comparison table
-  - Confusion matrix
+  - Confusion matrix (oracle + end-to-end)
   - Breakdown by misinformation type
   - Qualitative examples (successes + failures with actual images)
   - Learning curves if classifier was trained on top
 
 - [ ] **Section 5.4 — Discussion**
-  - CLIP catches visual contradictions to some extent (swapped images have lower similarity)
-  - CLIP fails on text contradictions (image is correct, claim is wrong — CLIP still sees high similarity)
-  - CLIP fails on temporal mismatches (old vs new photo looks the same)
-  - Key insight: similarity is not the same as factual verification
+  - **Retrieval findings**: CLIP retrieval likely works well for topic-matching but may retrieve visually similar but contextually wrong images (NewsCLIPpings effect)
+  - **Verification findings**:
+    - CLIP catches visual contradictions to some extent (swapped images have lower similarity)
+    - CLIP fails on text contradictions (image is correct, claim is wrong — CLIP still sees high similarity)
+    - CLIP fails on temporal mismatches (old vs new photo looks the same)
+  - **Error decomposition**: How much of end-to-end failure is retrieval error vs verification error?
+  - Key insight: similarity is not the same as factual verification — applies to both retrieval and verification
   - Discuss: what can be combined with Mahim's text results? Where do they complement?
 
 - [ ] **Section 6 — Updated Research Vision (0.5 page)**
-  - Image evidence alone is insufficient — limited to catching image swaps
+  - CLIP retrieval can find topically relevant images, but similarity ≠ factual relevance
+  - Image verification alone is insufficient — limited to catching image swaps
   - Text evidence (Mahim's results) likely catches different error types
   - Complementarity motivates cross-modal fusion (CMVN)
   - Updated plan for multimodal phase: fuse CLIP image features with RoBERTa text features via cross-attention
-  - Concrete next steps: implement Stage 2 contradiction detector
+  - The retrieval + verification pipeline established here becomes the foundation for the full CMVN system
+  - Concrete next steps: implement cross-modal Stage 2 contradiction detector, joint retrieval
 
 - [ ] **References**: Expand to 15+ (add CLIP variants, visual verification papers, OOC detection papers from research doc)
 
@@ -124,16 +150,19 @@ These are needed by BOTH reports and should be done together or divided early.
   2. Motivation: why multimodal misinformation matters (2 min)
   3. Dataset & Data Story: show actual WebQA-Adv examples with images (3 min) — **high grading weight**
   4. Related Works: cluster into (1) CLIP/VLMs for verification, (2) OOC detection, (3) gap (2 min)
-  5. CLIP Model & Setup: architecture figure, how similarity scoring works (3 min)
-  6. Results & Analysis: lead with best figure, confusion matrix, breakdown by type, qualitative examples (5 min) — **highest grading weight**
-  7. Research Vision & Next Steps: what I learned, why multimodal is needed (3 min)
-  8. Q&A slide: summary table visible (1 min)
+  5. Two-Phase Pipeline: architecture figure showing retrieval → verification (2 min)
+  6. CLIP Retrieval Results: Recall@K curve, retrieval examples (2 min)
+  7. CLIP Verification Results: confusion matrix, breakdown by type, oracle vs end-to-end, qualitative examples (4 min) — **highest grading weight**
+  8. Research Vision & Next Steps: what I learned, why multimodal is needed (3 min)
+  9. Q&A slide: summary table visible (1 min)
 
 - [ ] **Prepare for Q&A defense questions**:
   - "Why CLIP and not BLIP-2 or LLaVA?"
   - "Isn't CLIP already cross-modal? Why call this unimodal?"
   - "What if you fine-tuned CLIP instead of freezing it?"
   - "How do your results compare to Mahim's text results?"
+  - "Why use CLIP for both retrieval and verification instead of a dedicated retrieval model?"
+  - "How does retrieval quality affect your end-to-end verification accuracy?"
 
 ---
 
@@ -142,10 +171,11 @@ These are needed by BOTH reports and should be done together or divided early.
 | When | Task | Deliverable |
 |------|------|-------------|
 | **Week 1** | Download WebQA, build adversarial augmentation pipeline (with Mahim) | WebQA-Adv dataset with splits |
-| **Week 1** | Implement CLIP similarity scoring pipeline | Working CLIP inference code |
-| **Week 2** | Run CLIP on full dataset, tune thresholds, compute all metrics | Results tables + figures |
-| **Week 2** | Run ablations: per-type breakdown, qualitative analysis | Analysis notebooks |
-| **Week 3** | Write Sections 5.1–5.4 (experiments, results, discussion) | Draft of core sections |
+| **Week 1** | Pre-compute CLIP embeddings for ~390K images, implement retrieval pipeline | Image index + retrieval code |
+| **Week 1** | Implement CLIP verification pipeline (threshold + MLP classifier) | Working retrieval + verification code |
+| **Week 2** | Run retrieval evaluation (Recall@K), run verification on oracle + retrieved evidence | Retrieval + verification results |
+| **Week 2** | Run ablations: per-type breakdown, oracle vs end-to-end, qualitative analysis | Analysis notebooks |
+| **Week 3** | Write Sections 5.1–5.4 (retrieval, verification, results, discussion) | Draft of core sections |
 | **Week 3** | Write Sections 1, 6, expand Section 3 to 15+ refs | Complete report draft |
 | **Week 3** | Build presentation slides | Slide deck draft |
 | **Week 4** | Revise report, finalize figures, write annotated bibliography | Final report |
@@ -155,22 +185,49 @@ These are needed by BOTH reports and should be done together or divided early.
 
 ## Part C: Key Technical Details
 
-### CLIP Similarity Scoring Pipeline
+### Phase 1: CLIP Image Retrieval Pipeline
 
 ```python
-# Pseudocode
+# Pseudocode — Indexing & Retrieval
 import clip
+import numpy as np
 
 model, preprocess = clip.load("ViT-L/14")
 
-for claim, images, label in dataset:
+# Step 1: Pre-compute image embeddings for entire pool
+image_pool_embeddings = []
+for img in all_webqa_images:  # ~390K images
+    emb = model.encode_image(preprocess(img))
+    image_pool_embeddings.append(emb)
+image_pool_embeddings = np.stack(image_pool_embeddings)  # [390K, 768]
+image_pool_embeddings /= np.linalg.norm(image_pool_embeddings, axis=1, keepdims=True)
+
+# Step 2: Retrieve top-K images per claim
+for claim, gold_image_ids, label in dataset:
     text_features = model.encode_text(clip.tokenize(claim))
-    image_features = model.encode_image(preprocess(images))
+    text_features /= text_features.norm()
+
+    # Cosine similarity against entire pool
+    similarities = (text_features @ image_pool_embeddings.T).squeeze()  # [390K]
+
+    # Top-K retrieval
+    top_k_indices = similarities.argsort(descending=True)[:K]
+    retrieved_images = [image_pool[i] for i in top_k_indices]
+
+    # Evaluate retrieval: is gold image in top-K?
+    recall_at_k = any(idx in gold_image_ids for idx in top_k_indices)
+```
+
+### Phase 2: CLIP Verification Pipeline
+
+```python
+# Pseudocode — Verification (runs on retrieved OR oracle evidence)
+for claim, evidence_images, label in dataset:
+    text_features = model.encode_text(clip.tokenize(claim))
+    image_features = model.encode_image(preprocess(evidence_images))
 
     # Cosine similarity
     similarity = (text_features @ image_features.T).squeeze()
-
-    # Max similarity across candidate images
     max_sim = similarity.max()
 
     # Threshold-based verdict
@@ -184,6 +241,16 @@ for claim, images, label in dataset:
 
 ### Expected Results Pattern
 
+#### Retrieval (Phase 1)
+
+| K | Expected Recall@K | Notes |
+|---|---|---|
+| 5 | ~40-60% | CLIP retrieves topically similar images; many near-misses |
+| 10 | ~55-70% | More room for correct image to appear |
+| 20 | ~65-80% | Reasonable recall, but pool is large and diverse |
+
+#### Verification (Phase 2)
+
 | Misinformation Type | Expected CLIP Performance | Why |
 |---|---|---|
 | True claims | Moderate-high similarity | Image matches claim topic |
@@ -194,12 +261,15 @@ for claim, images, label in dataset:
 
 ### Metrics to Report
 
+**Retrieval metrics:**
+- Recall@5, Recall@10, Recall@20
+
+**Verification metrics (report for both oracle and end-to-end):**
 - Macro F1 (primary — handles class imbalance)
 - Per-class F1 (True / False / Unverifiable)
 - Overall Accuracy
 - Confusion Matrix
 - Similarity score distributions per class
-- Recall@K if doing evidence retrieval
 
 ---
 

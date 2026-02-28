@@ -1,8 +1,8 @@
 # Mahim's Midterm Plan — Text Modality (Text Evidence)
 
-> **Role**: Evaluate text evidence for claim verification using RoBERTa
-> **Model**: RoBERTa-base — fine-tuned for Natural Language Inference (claim vs text evidence)
-> **Question**: "How useful is text evidence alone for verifying textual claims?"
+> **Role**: Retrieve and verify text evidence for claim verification using BM25 + RoBERTa
+> **Model**: BM25 for retrieval, RoBERTa-base fine-tuned for NLI verification
+> **Question**: "Can BM25 retrieve the right text evidence AND can RoBERTa use it to verify claims?"
 
 ---
 
@@ -32,11 +32,20 @@ These are needed by BOTH reports and should be done together or divided early.
 
 #### Code & Experiments
 
-- [ ] **RoBERTa NLI Baseline Implementation**
+- [ ] **Phase 1: BM25 Text Retrieval**
+  - Index the full WebQA text snippet pool (~540K text snippets) using BM25 (via `rank_bm25` or Elasticsearch)
+  - For each claim:
+    - Tokenize claim as BM25 query
+    - Retrieve top-K text snippets (K=5, 10, 20) ranked by BM25 score
+  - Evaluate retrieval quality: does the correct evidence snippet appear in top-K?
+  - Metrics: Recall@5, Recall@10, Recall@20
+
+- [ ] **Phase 2: RoBERTa NLI Verification (on retrieved evidence)**
   - Load pre-trained RoBERTa-base (or start from `roberta-large-mnli` which is already NLI-tuned)
-  - Input format: `[CLS] claim [SEP] text_evidence [SEP]`
+  - Input format: `[CLS] text_evidence [SEP] claim [SEP]` (premise first, hypothesis second)
   - Fine-tune on WebQA-Adv for 3-way classification (True / False / Unverifiable)
   - This is standard NLI: does the text evidence entail, contradict, or neither support the claim?
+  - Run verification on both retrieved evidence AND oracle (gold) evidence for comparison — this isolates retrieval errors from verification errors
 
 - [ ] **Training Details**
   - Optimizer: AdamW
@@ -52,19 +61,28 @@ These are needed by BOTH reports and should be done together or divided early.
   - DeBERTa-v3 (stronger NLI model, if time permits)
 
 - [ ] **Ablation / Analysis**
-  - Break down performance by misinformation type:
+  - **Retrieval analysis:**
+    - Recall@K curves (K=5, 10, 20) — how often does the correct text snippet appear in top-K?
+    - BM25 retrieval failure analysis: what types of claims cause BM25 to retrieve wrong snippets?
+    - Retrieval quality by misinformation type
+  - **Verification analysis (breakdown by misinformation type):**
     - How does RoBERTa perform on text contradictions (claim negated/altered)?
     - How does RoBERTa perform on visual contradictions (text is fine, image is wrong)?
     - How does RoBERTa perform on temporal mismatches?
+  - **End-to-end vs oracle comparison:**
+    - Verification with BM25-retrieved evidence vs verification with gold evidence
+    - This isolates how much performance loss comes from retrieval errors vs verification errors
   - Qualitative examples:
-    - Success cases: where RoBERTa detects claim contradicts text evidence
-    - Failure cases: where text evidence is consistent but image is the problem
-  - Confusion matrix (3-way: True/False/Unverifiable)
+    - Success cases: where BM25 retrieves correctly AND RoBERTa classifies correctly
+    - Failure cases: retrieval failures (wrong snippet) vs verification failures (right snippet, wrong verdict)
+  - Confusion matrix (3-way: True/False/Unverifiable) — for both oracle and end-to-end
   - Attention visualization: what tokens does RoBERTa attend to when making decisions?
 
 - [ ] **Generate Figures**
-  - Confusion matrix
+  - Recall@K curve (K=1, 5, 10, 20)
+  - Confusion matrix (oracle evidence + end-to-end)
   - Per-class performance bar chart (Macro F1, accuracy per class)
+  - Oracle vs end-to-end performance comparison bar chart
   - Training/validation loss curves
   - Attention heatmaps on example claim-evidence pairs
   - Qualitative examples: 2-3 success cases, 2-3 failure cases
@@ -76,12 +94,18 @@ These are needed by BOTH reports and should be done together or divided early.
   - Summarize: problem → text modality analysis with RoBERTa → key results → takeaway (text evidence catches some but misses image-based deception)
 
 - [ ] **Section 5.1 — Unimodal Models & Methods (1–1.5 pages)**
+  - Explain two-phase pipeline:
+    - **Phase 1 — BM25 Retrieval**: Index ~540K text snippets, retrieve top-K by BM25 score
+    - **Phase 2 — RoBERTa NLI Verification**: Classify retrieved evidence against claim
+  - Explain BM25:
+    - TF-IDF-based sparse retrieval, no training required
+    - Why BM25: standard baseline for text retrieval, fast, interpretable
   - Explain RoBERTa architecture in detail:
     - BERT foundation: masked language modeling, next sentence prediction
     - RoBERTa improvements: dynamic masking, larger batches, no NSP, more data
     - Pre-training on 160GB of text data
     - Fine-tuning for NLI: how [CLS] token representation is used for classification
-  - Frame as Natural Language Inference:
+  - Frame verification as Natural Language Inference:
     - Premise = text evidence, Hypothesis = claim
     - Entailment → True, Contradiction → False, Neutral → Unverifiable
   - Why RoBERTa is appropriate:
@@ -92,36 +116,45 @@ These are needed by BOTH reports and should be done together or divided early.
 
 - [ ] **Section 5.2 — Experiments & Evaluation (0.5 page)**
   - Train/val/test split sizes and strategy
+  - Text pool size (~540K snippets) and BM25 indexing details
   - Hardware: GPU type, memory
-  - Software: PyTorch, HuggingFace transformers version
-  - Hyperparameters: LR, batch size, epochs, warmup, max seq length, class weights
-  - Metrics: Macro F1, Accuracy, per-class F1
+  - Software: PyTorch, HuggingFace transformers, rank_bm25 version
+  - Hyperparameters: K values for retrieval, LR, batch size, epochs, warmup, max seq length, class weights
+  - Retrieval metrics: Recall@5, Recall@10, Recall@20
+  - Verification metrics: Macro F1, Accuracy, per-class F1
   - Regularization: dropout, weight decay
   - Data: text evidence + claim only (no images used)
 
 - [ ] **Section 5.3 — Results (1 page)**
-  - Summary table: RoBERTa performance across metrics
+  - Retrieval results: Recall@K table across K values
+  - Verification results: RoBERTa performance (with oracle evidence AND with BM25-retrieved evidence)
+  - End-to-end vs oracle comparison table — quantify performance drop from retrieval errors
   - If additional baselines exist: comparison table (BERT vs RoBERTa vs TF-IDF)
-  - Confusion matrix
+  - Confusion matrix (oracle + end-to-end)
   - Breakdown by misinformation type
   - Training curves (loss, accuracy over epochs)
   - Attention heatmap examples showing what RoBERTa focuses on
   - Qualitative success/failure examples
 
 - [ ] **Section 5.4 — Discussion**
-  - RoBERTa catches text contradictions well (claim says X, evidence says Y)
-  - RoBERTa fails on visual contradictions (text evidence is consistent, problem is the image)
-  - RoBERTa fails on temporal mismatches (text doesn't capture time inconsistency)
+  - **Retrieval findings**: BM25 likely retrieves topically relevant snippets well (lexical overlap) but may miss semantic matches requiring paraphrasing
+  - **Verification findings**:
+    - RoBERTa catches text contradictions well (claim says X, evidence says Y)
+    - RoBERTa fails on visual contradictions (text evidence is consistent, problem is the image)
+    - RoBERTa fails on temporal mismatches (text doesn't capture time inconsistency)
+  - **Error decomposition**: How much of end-to-end failure is retrieval error vs verification error?
   - NLI framing is natural for text-only verification but inherently limited
   - Key insight: text evidence alone misses an entire category of deception
   - Discuss: how does this complement Devang's CLIP results? Where do they overlap/differ?
 
 - [ ] **Section 6 — Updated Research Vision (0.5 page)**
-  - Text evidence catches text-based deception but is blind to image-based deception
+  - BM25 retrieval provides a strong lexical baseline but misses semantic paraphrases
+  - Text verification catches text-based deception but is blind to image-based deception
   - Image evidence (Devang's results) likely catches the opposite
   - Complementarity is clear → motivates cross-modal fusion (CMVN)
-  - Updated plan: combine RoBERTa text features with CLIP image features via cross-attention
-  - Concrete next steps: implement Stage 2 contradiction detector, joint training
+  - The retrieval + verification pipeline established here becomes the foundation for the full CMVN system
+  - Updated plan: combine RoBERTa text features with CLIP image features via cross-attention, joint retrieval
+  - Concrete next steps: implement cross-modal Stage 2 contradiction detector, dense retrieval
 
 - [ ] **References**: Expand to 15+ (add NLI papers, RoBERTa variants, textual entailment, fact-checking)
 
@@ -134,10 +167,11 @@ These are needed by BOTH reports and should be done together or divided early.
   2. Motivation: why multimodal misinformation matters (2 min)
   3. Dataset & Data Story: show example claims + text evidence pairs, label distribution (3 min) — **high grading weight**
   4. Related Works: cluster into (1) NLI/textual entailment, (2) text-based fact-checking, (3) gap (2 min)
-  5. RoBERTa Model & Setup: architecture figure, NLI framing, fine-tuning details (3 min)
-  6. Results & Analysis: lead with best figure, confusion matrix, breakdown by type, attention heatmaps, qualitative examples (5 min) — **highest grading weight**
-  7. Research Vision & Next Steps: what I learned, why multimodal is needed (3 min)
-  8. Q&A slide: summary table visible (1 min)
+  5. Two-Phase Pipeline: architecture figure showing BM25 retrieval → RoBERTa verification (2 min)
+  6. BM25 Retrieval Results: Recall@K curve, retrieval examples (2 min)
+  7. RoBERTa Verification Results: confusion matrix, breakdown by type, oracle vs end-to-end, attention heatmaps, qualitative examples (4 min) — **highest grading weight**
+  8. Research Vision & Next Steps: what I learned, why multimodal is needed (3 min)
+  9. Q&A slide: summary table visible (1 min)
 
 - [ ] **Prepare for Q&A defense questions**:
   - "Why RoBERTa and not DeBERTa or a larger model?"
@@ -145,6 +179,8 @@ These are needed by BOTH reports and should be done together or divided early.
   - "What if you increased the context window to include more evidence?"
   - "How do your results compare to Devang's CLIP results?"
   - "Could text evidence alone ever catch visual contradictions?"
+  - "Why BM25 instead of a dense retriever like DPR or ColBERT?"
+  - "How does retrieval quality affect your end-to-end verification accuracy?"
 
 ---
 
@@ -153,10 +189,11 @@ These are needed by BOTH reports and should be done together or divided early.
 | When | Task | Deliverable |
 |------|------|-------------|
 | **Week 1** | Download WebQA, build adversarial augmentation pipeline (with Devang) | WebQA-Adv dataset with splits |
+| **Week 1** | Index ~540K text snippets with BM25, implement retrieval pipeline | Text index + retrieval code |
 | **Week 1** | Implement RoBERTa fine-tuning pipeline (data loading, tokenization, training loop) | Working training code |
-| **Week 2** | Train RoBERTa on WebQA-Adv, tune hyperparameters | Trained model + metrics |
-| **Week 2** | Run ablations: per-type breakdown, attention analysis, qualitative examples | Analysis notebooks |
-| **Week 3** | Write Sections 5.1–5.4 (experiments, results, discussion) | Draft of core sections |
+| **Week 2** | Run BM25 retrieval evaluation (Recall@K), train RoBERTa on oracle + retrieved evidence | Retrieval results + trained model |
+| **Week 2** | Run ablations: per-type breakdown, oracle vs end-to-end, attention analysis, qualitative examples | Analysis notebooks |
+| **Week 3** | Write Sections 5.1–5.4 (retrieval, verification, results, discussion) | Draft of core sections |
 | **Week 3** | Write Sections 1, 6, expand Section 3 to 15+ refs | Complete report draft |
 | **Week 3** | Build presentation slides | Slide deck draft |
 | **Week 4** | Revise report, finalize figures, write annotated bibliography | Final report |
@@ -166,10 +203,35 @@ These are needed by BOTH reports and should be done together or divided early.
 
 ## Part C: Key Technical Details
 
-### RoBERTa NLI Pipeline
+### Phase 1: BM25 Text Retrieval Pipeline
 
 ```python
-# Pseudocode
+# Pseudocode — Indexing & Retrieval
+from rank_bm25 import BM25Okapi
+import nltk
+
+# Step 1: Index all text snippets
+all_snippets = [snippet["text"] for snippet in webqa_text_pool]  # ~540K snippets
+tokenized_corpus = [nltk.word_tokenize(doc.lower()) for doc in all_snippets]
+bm25 = BM25Okapi(tokenized_corpus)
+
+# Step 2: Retrieve top-K snippets per claim
+for claim, gold_snippet_ids, label in dataset:
+    tokenized_query = nltk.word_tokenize(claim.lower())
+    scores = bm25.get_scores(tokenized_query)
+
+    # Top-K retrieval
+    top_k_indices = scores.argsort()[-K:][::-1]
+    retrieved_snippets = [all_snippets[i] for i in top_k_indices]
+
+    # Evaluate retrieval: is gold snippet in top-K?
+    recall_at_k = any(idx in gold_snippet_ids for idx in top_k_indices)
+```
+
+### Phase 2: RoBERTa NLI Verification Pipeline
+
+```python
+# Pseudocode — Verification (runs on retrieved OR oracle evidence)
 from transformers import RobertaForSequenceClassification, RobertaTokenizer
 
 model = RobertaForSequenceClassification.from_pretrained(
@@ -178,9 +240,9 @@ model = RobertaForSequenceClassification.from_pretrained(
 tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
 
 for claim, text_evidence, label in dataset:
-    # NLI format: premise (evidence) + hypothesis (claim)
+    # NLI format: premise (evidence) first, hypothesis (claim) second
     inputs = tokenizer(
-        claim, text_evidence,
+        text_evidence, claim,
         max_length=512,
         truncation=True,
         padding="max_length",
@@ -211,6 +273,16 @@ model = AutoModelForSequenceClassification.from_pretrained(
 
 ### Expected Results Pattern
 
+#### Retrieval (Phase 1)
+
+| K | Expected Recall@K | Notes |
+|---|---|---|
+| 5 | ~50-70% | BM25 strong on lexical overlap; claims often share key terms with evidence |
+| 10 | ~65-80% | More room for paraphrased evidence to appear |
+| 20 | ~75-90% | BM25 generally reliable for text-to-text retrieval at higher K |
+
+#### Verification (Phase 2)
+
 | Misinformation Type | Expected RoBERTa Performance | Why |
 |---|---|---|
 | True claims | Good (high confidence) | Evidence supports claim — straightforward entailment |
@@ -221,6 +293,10 @@ model = AutoModelForSequenceClassification.from_pretrained(
 
 ### Metrics to Report
 
+**Retrieval metrics:**
+- Recall@5, Recall@10, Recall@20
+
+**Verification metrics (report for both oracle and end-to-end):**
 - Macro F1 (primary — handles class imbalance)
 - Per-class F1 (True / False / Unverifiable)
 - Overall Accuracy
