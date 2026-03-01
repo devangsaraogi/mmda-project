@@ -157,7 +157,9 @@ def evaluate_retrieval(
     max_k = max(top_k_values)
     recall_scores = {k: [] for k in top_k_values}
 
-    for i in tqdm(range(len(dataset)), desc="Evaluating retrieval"):
+    n = len(dataset)
+    log_every = max(1, n // 20)
+    for i in range(n):
         item = dataset[i]
         results = retriever.retrieve(item["claim_text"], top_k=max_k)
         retrieved_ids = {r[0] for r in results}
@@ -167,6 +169,9 @@ def evaluate_retrieval(
             top_k_ids = {r[0] for r in results[:k]}
             hit = len(top_k_ids & gold_ids) > 0
             recall_scores[k].append(float(hit))
+
+        if (i + 1) % log_every == 0 or (i + 1) == n:
+            logger.info(f"Retrieval eval: {i+1}/{n} claims ({100*(i+1)/n:.0f}%)")
 
     recall_at_k = {k: float(np.mean(scores)) for k, scores in recall_scores.items()}
     for k, r in sorted(recall_at_k.items()):

@@ -42,7 +42,9 @@ def extract_features(
     all_claim_ids = []
     all_misinfo_types = []
 
-    for i in tqdm(range(len(dataset)), desc="Extracting features"):
+    n = len(dataset)
+    log_every = max(1, n // 20)
+    for i in range(n):
         item = dataset[i]
         claim_id = item["claim_id"]
         claim_text = item["claim_text"]
@@ -89,6 +91,9 @@ def extract_features(
         all_claim_ids.append(claim_id)
         all_misinfo_types.append(item["misinfo_type"])
 
+        if (i + 1) % log_every == 0 or (i + 1) == n:
+            logger.info(f"Feature extraction: {i+1}/{n} claims ({100*(i+1)/n:.0f}%)")
+
     return {
         "features": np.array(all_features),
         "embeddings": np.array(all_embeddings),
@@ -130,10 +135,14 @@ def build_evidence_map_retrieved(
         Dict mapping claim_id → list of (image_id, score) tuples.
     """
     evidence_map = {}
-    for i in tqdm(range(len(dataset)), desc="Retrieving evidence"):
+    n = len(dataset)
+    log_every = max(1, n // 20)
+    for i in range(n):
         item = dataset[i]
         results = retriever.retrieve(item["claim_text"], top_k=top_k)
         evidence_map[item["claim_id"]] = results
+        if (i + 1) % log_every == 0 or (i + 1) == n:
+            logger.info(f"Evidence retrieval: {i+1}/{n} claims ({100*(i+1)/n:.0f}%)")
     return evidence_map
 
 
