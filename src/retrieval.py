@@ -138,8 +138,20 @@ def precompute_embeddings(
             done = min(i + batch_size, len(image_ids))
             logger.info(f"Encoded {done}/{len(image_ids)} images ({100*done/len(image_ids):.0f}%)")
 
-    if skipped:
-        logger.warning(f"Skipped {skipped} unreadable images out of {len(image_ids)}")
+    logger.info("=" * 50)
+    logger.info("EMBEDDING SUMMARY")
+    logger.info(f"  Total images in dataset: {len(image_ids)}")
+    logger.info(f"  Successfully encoded:    {len(valid_ids)}")
+    logger.info(f"  Skipped (corrupt):       {skipped}")
+    if len(image_ids) > 0:
+        logger.info(f"  Success rate:            {100*len(valid_ids)/len(image_ids):.2f}%")
+    logger.info("=" * 50)
+
+    if not valid_ids:
+        raise RuntimeError("All images failed to load — no embeddings produced")
+
+    if skipped > len(image_ids) * 0.05:
+        logger.warning(f"High corruption rate: {skipped}/{len(image_ids)} images failed")
 
     all_embeds = torch.cat(all_embeds, dim=0)
 
