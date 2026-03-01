@@ -119,21 +119,32 @@ def precompute_embeddings(
     logger.info(f"Pre-computing embeddings for {len(image_ids)} images...")
 
     all_embeds = []
+    valid_ids = []
+    skipped = 0
     num_batches = (len(image_ids) + batch_size - 1) // batch_size
     log_every = max(1, num_batches // 20)  # ~5% increments
     for batch_idx, i in enumerate(range(0, len(image_ids), batch_size)):
         batch_ids = image_ids[i : i + batch_size]
         batch_images = [dataset.get_image(img_id) for img_id in batch_ids]
-        embeds = encoder.encode_images(batch_images, batch_size=len(batch_images))
-        all_embeds.append(embeds)
+        # Filter out unreadable images
+        valid_pairs = [(img_id, img) for img_id, img in zip(batch_ids, batch_images) if img is not None]
+        skipped += len(batch_ids) - len(valid_pairs)
+        if valid_pairs:
+            ids, imgs = zip(*valid_pairs)
+            embeds = encoder.encode_images(list(imgs), batch_size=len(imgs))
+            all_embeds.append(embeds)
+            valid_ids.extend(ids)
         if (batch_idx + 1) % log_every == 0 or (batch_idx + 1) == num_batches:
             done = min(i + batch_size, len(image_ids))
             logger.info(f"Encoded {done}/{len(image_ids)} images ({100*done/len(image_ids):.0f}%)")
 
+    if skipped:
+        logger.warning(f"Skipped {skipped} unreadable images out of {len(image_ids)}")
+
     all_embeds = torch.cat(all_embeds, dim=0)
 
     index = EmbeddingIndex()
-    index.build(all_embeds, image_ids)
+    index.build(all_embeds, valid_ids)
     index.save(save_path)
 
     return index

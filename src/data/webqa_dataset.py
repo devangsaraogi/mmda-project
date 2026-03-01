@@ -131,16 +131,23 @@ class WebQADataset(BaseClaimDataset):
             "misinfo_type": claim.get("manipulation_type", "true").lower(),
         }
 
-    def get_image(self, image_id: str) -> Image.Image:
-        """Load a single image from the TSV by its numeric ID string."""
+    def get_image(self, image_id: str):
+        """Load a single image from the TSV by its numeric ID string.
+
+        Returns PIL Image on success, None if the image is corrupt/unreadable.
+        """
         line_num = self._id_to_line[image_id]
         offset = self._byte_offsets[line_num]
         with open(self._tsv_path, "rb") as tsv:
             tsv.seek(offset)
             raw_line = tsv.readline()
         parts = raw_line.split(b"\t", 1)
-        img_bytes = base64.b64decode(parts[1])
-        return Image.open(BytesIO(img_bytes)).convert("RGB")
+        try:
+            img_bytes = base64.b64decode(parts[1])
+            return Image.open(BytesIO(img_bytes)).convert("RGB")
+        except Exception as e:
+            logger.warning("Skipping unreadable image %s: %s", image_id, e)
+            return None
 
     def get_all_image_ids(self) -> list[str]:
         """Return ALL image IDs from the TSV (full retrieval pool)."""
