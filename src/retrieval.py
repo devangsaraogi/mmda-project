@@ -124,17 +124,16 @@ def precompute_embeddings(
     Returns:
         Built EmbeddingIndex.
     """
-    image_ids = dataset.get_all_image_ids()
-    logger.info(f"Pre-computing embeddings for {len(image_ids)} images...")
+    total_images = len(dataset.get_all_image_ids())
+    logger.info(f"Pre-computing embeddings for {total_images} images (sequential scan)...")
 
-    # Prefetch: background thread loads the next batch while GPU encodes current
+    # Sequential scan with prefetch: background thread reads TSV linearly
+    # while GPU encodes the current batch
     prefetch_q = queue.Queue(maxsize=2)
 
     def _loader():
-        for i in range(0, len(image_ids), batch_size):
-            batch_ids = image_ids[i : i + batch_size]
-            batch_images = dataset.get_images_batch(batch_ids)
-            prefetch_q.put((i, batch_ids, batch_images))
+        for batch_ids, batch_imgs in dataset.iter_all_images(batch_size):
+            prefetch_q.put((batch_ids, batch_imgs))
         prefetch_q.put(None)  # sentinel
 
     loader_thread = threading.Thread(target=_loader, daemon=True)
@@ -143,14 +142,15 @@ def precompute_embeddings(
     all_embeds = []
     valid_ids = []
     skipped = 0
-    num_batches = (len(image_ids) + batch_size - 1) // batch_size
-    log_every = max(1, num_batches // 20)  # ~5% increments
+    done = 0
+    num_batches = (total_images + batch_size - 1) // batch_size
+    log_every = max(1, num_batches // 20)
     batch_idx = 0
     while True:
         item = prefetch_q.get()
         if item is None:
             break
-        i, batch_ids, batch_images = item
+        batch_ids, batch_images = item
         # Filter out unreadable images
         valid_pairs = [(img_id, img) for img_id, img in zip(batch_ids, batch_images) if img is not None]
         skipped += len(batch_ids) - len(valid_pairs)
@@ -159,25 +159,25 @@ def precompute_embeddings(
             embeds = encoder.encode_images(list(imgs), batch_size=len(imgs))
             all_embeds.append(embeds)
             valid_ids.extend(ids)
+        done += len(batch_ids)
         batch_idx += 1
         if batch_idx % log_every == 0 or batch_idx == num_batches:
-            done = min(i + batch_size, len(image_ids))
-            logger.info(_progress_bar(done, len(image_ids), "Encoding"))
+            logger.info(_progress_bar(done, total_images, "Encoding"))
 
     logger.info("=" * 50)
     logger.info("EMBEDDING SUMMARY")
-    logger.info(f"  Total images in dataset: {len(image_ids)}")
+    logger.info(f"  Total images in dataset: {total_images}")
     logger.info(f"  Successfully encoded:    {len(valid_ids)}")
     logger.info(f"  Skipped (corrupt):       {skipped}")
-    if len(image_ids) > 0:
-        logger.info(f"  Success rate:            {100*len(valid_ids)/len(image_ids):.2f}%")
+    if total_images > 0:
+        logger.info(f"  Success rate:            {100*len(valid_ids)/total_images:.2f}%")
     logger.info("=" * 50)
 
     if not valid_ids:
         raise RuntimeError("All images failed to load — no embeddings produced")
 
-    if skipped > len(image_ids) * 0.05:
-        logger.warning(f"High corruption rate: {skipped}/{len(image_ids)} images failed")
+    if skipped > total_images * 0.05:
+        logger.warning(f"High corruption rate: {skipped}/{total_images} images failed")
 
     all_embeds = torch.cat(all_embeds, dim=0)
 

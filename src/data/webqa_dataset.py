@@ -168,6 +168,37 @@ class WebQADataset(BaseClaimDataset):
             images = list(pool.map(self.get_image, image_ids))
         return images
 
+    def iter_all_images(self, batch_size: int = 256):
+        """Sequentially scan the TSV and yield batches of (id, image) pairs.
+
+        One linear pass through the file — no seeking. Much faster on
+        network filesystems (GPFS) than random-access get_image() calls.
+        Corrupt images are yielded as (id, None).
+        """
+        logger.info("Sequential TSV scan (batch_size=%d)...", batch_size)
+        batch_ids = []
+        batch_imgs = []
+        with open(self._tsv_path, "rb") as tsv:
+            for raw_line in tsv:
+                tab_pos = raw_line.find(b"\t")
+                if tab_pos == -1:
+                    continue
+                img_id = raw_line[:tab_pos].decode("ascii")
+                try:
+                    img_bytes = base64.b64decode(raw_line[tab_pos + 1:])
+                    img = Image.open(BytesIO(img_bytes)).convert("RGB")
+                except Exception as e:
+                    logger.warning("Skipping unreadable image %s: %s", img_id, e)
+                    img = None
+                batch_ids.append(img_id)
+                batch_imgs.append(img)
+                if len(batch_ids) == batch_size:
+                    yield batch_ids, batch_imgs
+                    batch_ids = []
+                    batch_imgs = []
+        if batch_ids:
+            yield batch_ids, batch_imgs
+
     def get_all_image_ids(self) -> list[str]:
         """Return ALL image IDs from the TSV (full retrieval pool)."""
         return self._all_image_ids
