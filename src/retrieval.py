@@ -204,14 +204,18 @@ def evaluate_retrieval(
         Dict mapping K to Recall@K.
     """
     max_k = max(top_k_values)
-    recall_scores = {k: [] for k in top_k_values}
-
     n = len(dataset)
+
+    # Batch encode all claim texts at once (instead of one-by-one)
+    logger.info("Batch encoding %d claim texts...", n)
+    claim_texts = [dataset[i]["claim_text"] for i in range(n)]
+    all_results = retriever.retrieve_batch(claim_texts, top_k=max_k)
+
+    recall_scores = {k: [] for k in top_k_values}
     log_every = max(1, n // 20)
     for i in range(n):
         item = dataset[i]
-        results = retriever.retrieve(item["claim_text"], top_k=max_k)
-        retrieved_ids = {r[0] for r in results}
+        results = all_results[i]
         gold_ids = set(item["gold_image_ids"])
 
         for k in top_k_values:

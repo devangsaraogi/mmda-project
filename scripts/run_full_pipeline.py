@@ -108,7 +108,7 @@ def main():
         print("=" * 60)
 
         from scripts.train_mlp import train_mlp
-        train_mlp(cfg, tracker=tracker)
+        train_mlp(cfg, tracker=tracker, embedding_index=index)
 
         tracker.log_step("train_mlp", status="complete")
 
@@ -120,10 +120,12 @@ def main():
         from scripts.run_verification import run_threshold_verification, run_mlp_verification
 
         print("\n--- Threshold-based ---")
-        thresh_oracle, thresh_e2e = run_threshold_verification(cfg, encoder, dataset, retriever)
+        thresh_oracle, thresh_e2e = run_threshold_verification(cfg, encoder, dataset, retriever,
+                                                               embedding_index=index)
 
         print("\n--- MLP-based ---")
-        mlp_oracle, mlp_e2e = run_mlp_verification(cfg, encoder, dataset, retriever)
+        mlp_oracle, mlp_e2e = run_mlp_verification(cfg, encoder, dataset, retriever,
+                                                    embedding_index=index)
 
         # === Summary ===
         print("\n" + "=" * 60)

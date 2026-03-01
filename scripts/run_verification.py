@@ -36,14 +36,14 @@ from src.visualization import (
 logger = logging.getLogger(__name__)
 
 
-def run_threshold_verification(cfg, encoder, dataset, retriever=None):
+def run_threshold_verification(cfg, encoder, dataset, retriever=None, embedding_index=None):
     """Run threshold-based verification in both oracle and E2E modes."""
     test_data = dataset.get_split("test")
     val_data = dataset.get_split("val")
 
     # Oracle features
-    oracle_feats = verify_oracle(encoder, test_data)
-    val_oracle_feats = verify_oracle(encoder, val_data)
+    oracle_feats = verify_oracle(encoder, test_data, embedding_index=embedding_index)
+    val_oracle_feats = verify_oracle(encoder, val_data, embedding_index=embedding_index)
 
     # Fit threshold on val set
     thresh_clf = ThresholdClassifier(cfg)
@@ -86,7 +86,8 @@ def run_threshold_verification(cfg, encoder, dataset, retriever=None):
     # E2E mode (if retriever available)
     e2e_metrics = None
     if retriever:
-        e2e_feats = verify_e2e(encoder, retriever, test_data, cfg.retrieval.default_top_k)
+        e2e_feats = verify_e2e(encoder, retriever, test_data, cfg.retrieval.default_top_k,
+                              embedding_index=embedding_index)
         e2e_max_sims = e2e_feats["features"][:, 0]
         e2e_preds = thresh_clf.predict(e2e_max_sims)
         e2e_metrics = compute_verification_metrics(e2e_feats["labels"], e2e_preds)
@@ -122,12 +123,12 @@ def run_threshold_verification(cfg, encoder, dataset, retriever=None):
     return oracle_metrics, e2e_metrics
 
 
-def run_mlp_verification(cfg, encoder, dataset, retriever=None, checkpoint_override=None):
+def run_mlp_verification(cfg, encoder, dataset, retriever=None, checkpoint_override=None, embedding_index=None):
     """Run MLP-based verification in both oracle and E2E modes."""
     test_data = dataset.get_split("test")
 
     # Oracle features
-    oracle_feats = verify_oracle(encoder, test_data)
+    oracle_feats = verify_oracle(encoder, test_data, embedding_index=embedding_index)
 
     # Load trained MLP
     device = torch.device(cfg.clip.device if torch.cuda.is_available() or cfg.clip.device == "cpu" else "cpu")
@@ -177,7 +178,8 @@ def run_mlp_verification(cfg, encoder, dataset, retriever=None, checkpoint_overr
     # E2E mode
     e2e_metrics = None
     if retriever:
-        e2e_feats = verify_e2e(encoder, retriever, test_data, cfg.retrieval.default_top_k)
+        e2e_feats = verify_e2e(encoder, retriever, test_data, cfg.retrieval.default_top_k,
+                              embedding_index=embedding_index)
 
         if input_mode == "features":
             X_e2e = torch.tensor(e2e_feats["features"], dtype=torch.float32).to(device)
@@ -255,11 +257,12 @@ def main():
 
         # Try to load retriever for E2E
         retriever = None
+        embedding_index = None
         index_path = args.embeddings or os.path.join(cfg.results.embeddings_dir, "image_index.pt")
         if os.path.exists(index_path):
-            index = EmbeddingIndex()
-            index.load(index_path)
-            retriever = CLIPRetriever(encoder, index, cfg)
+            embedding_index = EmbeddingIndex()
+            embedding_index.load(index_path)
+            retriever = CLIPRetriever(encoder, embedding_index, cfg)
         else:
             logger.warning("No embedding index found. Skipping E2E evaluation.")
 
@@ -267,7 +270,8 @@ def main():
 
         if args.mode in ("threshold", "both"):
             print("\n=== Threshold-based Verification ===")
-            oracle, e2e = run_threshold_verification(cfg, encoder, dataset, retriever)
+            oracle, e2e = run_threshold_verification(cfg, encoder, dataset, retriever,
+                                                     embedding_index=embedding_index)
             results["threshold_oracle_f1"] = oracle["macro_f1"]
             if e2e:
                 results["threshold_e2e_f1"] = e2e["macro_f1"]
@@ -277,7 +281,8 @@ def main():
         if args.mode in ("mlp", "both"):
             print("\n=== MLP-based Verification ===")
             oracle, e2e = run_mlp_verification(cfg, encoder, dataset, retriever,
-                                               checkpoint_override=args.checkpoint)
+                                               checkpoint_override=args.checkpoint,
+                                               embedding_index=embedding_index)
             if oracle:
                 results["mlp_oracle_f1"] = oracle["macro_f1"]
                 if e2e:

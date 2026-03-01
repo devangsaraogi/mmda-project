@@ -20,13 +20,14 @@ from src.experiment_tracker import ExperimentTracker
 from src.models.clip_encoder import CLIPEncoder
 from src.models.mlp_classifier import MLPClassifier
 from src.data.webqa_dataset import WebQADataset
+from src.retrieval import EmbeddingIndex
 from src.verification import verify_oracle, build_evidence_map_oracle, extract_features
 from src.evaluation import save_metrics
 
 logger = logging.getLogger(__name__)
 
 
-def train_mlp(cfg, tracker=None):
+def train_mlp(cfg, tracker=None, embedding_index=None):
     ensure_dirs(cfg)
 
     # Load dataset
@@ -50,11 +51,11 @@ def train_mlp(cfg, tracker=None):
 
     logger.info("Extracting training features...")
     train_evidence = build_evidence_map_oracle(train_data)
-    train_feats = extract_features(encoder, train_data, train_evidence)
+    train_feats = extract_features(encoder, train_data, train_evidence, embedding_index=embedding_index)
 
     logger.info("Extracting validation features...")
     val_evidence = build_evidence_map_oracle(val_data)
-    val_feats = extract_features(encoder, val_data, val_evidence)
+    val_feats = extract_features(encoder, val_data, val_evidence, embedding_index=embedding_index)
 
     # Select input mode
     input_mode = cfg.verification.mlp.input_mode
@@ -197,6 +198,8 @@ def train_mlp(cfg, tracker=None):
 def main():
     parser = argparse.ArgumentParser(description="Train MLP classifier")
     parser.add_argument("--config", type=str, default=None)
+    parser.add_argument("--embeddings", type=str, default=None,
+                        help="Path to pre-computed image_index.pt (avoids re-encoding images)")
     parser.add_argument("overrides", nargs="*")
     args = parser.parse_args()
 
@@ -205,11 +208,16 @@ def main():
     setup_logging(cfg.logging.level, cfg.logging.log_dir)
     set_seed(cfg.seed)
 
+    embedding_index = None
+    if args.embeddings:
+        embedding_index = EmbeddingIndex()
+        embedding_index.load(args.embeddings)
+
     tracker = ExperimentTracker("train_mlp", cfg.results.experiments_dir)
     tracker.log_config(cfg)
 
     try:
-        train_mlp(cfg, tracker=tracker)
+        train_mlp(cfg, tracker=tracker, embedding_index=embedding_index)
         tracker.complete()
     except Exception as e:
         tracker.fail(str(e))
