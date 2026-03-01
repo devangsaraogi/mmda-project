@@ -36,10 +36,14 @@ python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA av
 echo ""
 nvidia-smi
 
-# Avoid matplotlib home quota issues
+# Redirect caches to scratch to avoid home quota issues
 GROUP=$(groups | cut -d' ' -f1)
-export MPLCONFIGDIR="/share/$GROUP/$USER/tmp/matplotlib"
-mkdir -p "$MPLCONFIGDIR"
+SCRATCH="/share/$GROUP/$USER"
+export MPLCONFIGDIR="$SCRATCH/tmp/matplotlib"
+export HF_HOME="$SCRATCH/.cache/huggingface"
+export TORCH_HOME="$SCRATCH/.cache/torch"
+export XDG_CACHE_HOME="$SCRATCH/.cache"
+mkdir -p "$MPLCONFIGDIR" "$HF_HOME" "$TORCH_HOME"
 
 # Run
 echo -e "\n========================================"
