@@ -1,5 +1,7 @@
 import os
 import logging
+import queue
+import threading
 
 import torch
 import numpy as np
@@ -125,14 +127,30 @@ def precompute_embeddings(
     image_ids = dataset.get_all_image_ids()
     logger.info(f"Pre-computing embeddings for {len(image_ids)} images...")
 
+    # Prefetch: background thread loads the next batch while GPU encodes current
+    prefetch_q = queue.Queue(maxsize=2)
+
+    def _loader():
+        for i in range(0, len(image_ids), batch_size):
+            batch_ids = image_ids[i : i + batch_size]
+            batch_images = dataset.get_images_batch(batch_ids)
+            prefetch_q.put((i, batch_ids, batch_images))
+        prefetch_q.put(None)  # sentinel
+
+    loader_thread = threading.Thread(target=_loader, daemon=True)
+    loader_thread.start()
+
     all_embeds = []
     valid_ids = []
     skipped = 0
     num_batches = (len(image_ids) + batch_size - 1) // batch_size
     log_every = max(1, num_batches // 20)  # ~5% increments
-    for batch_idx, i in enumerate(range(0, len(image_ids), batch_size)):
-        batch_ids = image_ids[i : i + batch_size]
-        batch_images = dataset.get_images_batch(batch_ids)
+    batch_idx = 0
+    while True:
+        item = prefetch_q.get()
+        if item is None:
+            break
+        i, batch_ids, batch_images = item
         # Filter out unreadable images
         valid_pairs = [(img_id, img) for img_id, img in zip(batch_ids, batch_images) if img is not None]
         skipped += len(batch_ids) - len(valid_pairs)
@@ -141,7 +159,8 @@ def precompute_embeddings(
             embeds = encoder.encode_images(list(imgs), batch_size=len(imgs))
             all_embeds.append(embeds)
             valid_ids.extend(ids)
-        if (batch_idx + 1) % log_every == 0 or (batch_idx + 1) == num_batches:
+        batch_idx += 1
+        if batch_idx % log_every == 0 or batch_idx == num_batches:
             done = min(i + batch_size, len(image_ids))
             logger.info(_progress_bar(done, len(image_ids), "Encoding"))
 
