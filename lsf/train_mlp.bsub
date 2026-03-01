@@ -50,7 +50,7 @@ DATASET=/share/csc791003s26/cmvn/dataset-folder
 
 python scripts/train_mlp.py \
     --config configs/default.yaml \
-    data.webqa_jsonl=$DATASET/webqa_adv.jsonl \
+    data.webqa_jsonl=$DATASET/step0_out/webqa_adv.jsonl \
     data.webqa_images_tsv=$DATASET/images/imgs.tsv \
     data.webqa_images_lineidx=$DATASET/images/imgs.lineidx \
     clip.device=cuda
