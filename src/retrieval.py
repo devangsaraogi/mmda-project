@@ -119,11 +119,16 @@ def precompute_embeddings(
     logger.info(f"Pre-computing embeddings for {len(image_ids)} images...")
 
     all_embeds = []
-    for i in tqdm(range(0, len(image_ids), batch_size), desc="Encoding images"):
+    num_batches = (len(image_ids) + batch_size - 1) // batch_size
+    log_every = max(1, num_batches // 20)  # ~5% increments
+    for batch_idx, i in enumerate(range(0, len(image_ids), batch_size)):
         batch_ids = image_ids[i : i + batch_size]
         batch_images = [dataset.get_image(img_id) for img_id in batch_ids]
         embeds = encoder.encode_images(batch_images, batch_size=len(batch_images))
         all_embeds.append(embeds)
+        if (batch_idx + 1) % log_every == 0 or (batch_idx + 1) == num_batches:
+            done = min(i + batch_size, len(image_ids))
+            logger.info(f"Encoded {done}/{len(image_ids)} images ({100*done/len(image_ids):.0f}%)")
 
     all_embeds = torch.cat(all_embeds, dim=0)
 
