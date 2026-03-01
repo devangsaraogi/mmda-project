@@ -3,6 +3,9 @@
 import argparse
 import os
 import sys
+from datetime import datetime
+
+import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -43,7 +46,10 @@ def main():
         encoder = CLIPEncoder(cfg)
 
         # Pre-compute and save
-        save_path = os.path.join(cfg.results.embeddings_dir, "image_index.pt")
+        gpu_name = torch.cuda.get_device_name(0).replace(" ", "_") if torch.cuda.is_available() else "cpu"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"image_index_{gpu_name}_{timestamp}.pt"
+        save_path = os.path.join(cfg.results.embeddings_dir, filename)
         precompute_embeddings(encoder, dataset, save_path, batch_size=cfg.clip.batch_size)
 
         tracker.log_results(
