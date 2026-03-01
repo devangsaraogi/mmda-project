@@ -1,0 +1,4 @@
+# Force LF line endings for all shell/cluster scripts
+*.sh text eol=lf
+*.bsub text eol=lf
+*.bash text eol=lf
