@@ -65,8 +65,9 @@ def setup_logging(level: str = "INFO", log_dir: str = "results/logs") -> None:
     root = logging.getLogger()
     root.setLevel(log_level)
 
-    # Console handler
-    console = logging.StreamHandler()
+    # Console handler (stdout so it appears in LSF .out logs)
+    import sys
+    console = logging.StreamHandler(sys.stdout)
     console.setLevel(log_level)
     console.setFormatter(fmt)
     root.addHandler(console)

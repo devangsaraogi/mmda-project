@@ -2,10 +2,9 @@ import logging
 
 import torch
 import numpy as np
-from tqdm import tqdm
 
 from .models.clip_encoder import CLIPEncoder
-from .retrieval import CLIPRetriever
+from .retrieval import CLIPRetriever, _progress_bar
 from .data.base_dataset import BaseClaimDataset
 
 logger = logging.getLogger(__name__)
@@ -92,7 +91,7 @@ def extract_features(
         all_misinfo_types.append(item["misinfo_type"])
 
         if (i + 1) % log_every == 0 or (i + 1) == n:
-            logger.info(f"Feature extraction: {i+1}/{n} claims ({100*(i+1)/n:.0f}%)")
+            logger.info(_progress_bar(i + 1, n, "Feature extraction"))
 
     return {
         "features": np.array(all_features),
@@ -142,7 +141,7 @@ def build_evidence_map_retrieved(
         results = retriever.retrieve(item["claim_text"], top_k=top_k)
         evidence_map[item["claim_id"]] = results
         if (i + 1) % log_every == 0 or (i + 1) == n:
-            logger.info(f"Evidence retrieval: {i+1}/{n} claims ({100*(i+1)/n:.0f}%)")
+            logger.info(_progress_bar(i + 1, n, "Evidence retrieval"))
     return evidence_map
 
 

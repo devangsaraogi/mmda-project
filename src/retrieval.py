@@ -3,12 +3,19 @@ import logging
 
 import torch
 import numpy as np
-from tqdm import tqdm
 
 from .models.clip_encoder import CLIPEncoder
 from .data.base_dataset import BaseClaimDataset
 
 logger = logging.getLogger(__name__)
+
+
+def _progress_bar(done: int, total: int, label: str, width: int = 30) -> str:
+    """Build a text progress bar string for logging."""
+    frac = done / total if total else 0
+    filled = int(width * frac)
+    bar = "\u2588" * filled + "\u2591" * (width - filled)
+    return f"{label}: [{bar}] {100*frac:5.1f}%  {done}/{total}"
 
 
 class EmbeddingIndex:
@@ -136,7 +143,7 @@ def precompute_embeddings(
             valid_ids.extend(ids)
         if (batch_idx + 1) % log_every == 0 or (batch_idx + 1) == num_batches:
             done = min(i + batch_size, len(image_ids))
-            logger.info(f"Encoded {done}/{len(image_ids)} images ({100*done/len(image_ids):.0f}%)")
+            logger.info(_progress_bar(done, len(image_ids), "Encoding"))
 
     logger.info("=" * 50)
     logger.info("EMBEDDING SUMMARY")
@@ -194,7 +201,7 @@ def evaluate_retrieval(
             recall_scores[k].append(float(hit))
 
         if (i + 1) % log_every == 0 or (i + 1) == n:
-            logger.info(f"Retrieval eval: {i+1}/{n} claims ({100*(i+1)/n:.0f}%)")
+            logger.info(_progress_bar(i + 1, n, "Retrieval eval"))
 
     recall_at_k = {k: float(np.mean(scores)) for k, scores in recall_scores.items()}
     for k, r in sorted(recall_at_k.items()):
