@@ -1,0 +1,66 @@
+#!/bin/bash
+#BSUB -J mlp-train
+#BSUB -o ../logs/train_mlp_%J.out
+#BSUB -e ../logs/train_mlp_%J.err
+#BSUB -W 1:00
+#BSUB -q gpu
+#BSUB -gpu "num=1"
+#BSUB -n 8
+#BSUB -M 16GB
+
+echo "========================================"
+echo "MMDA — Train MLP Classifier"
+echo "========================================"
+echo "Job ID: $LSB_JOBID"
+echo "Job Name: $LSB_JOBNAME"
+echo "Queue: $LSB_QUEUE"
+echo "Host: $HOSTNAME"
+echo "Start time: $(date)"
+
+# Load modules
+echo -e "\n1. Loading modules..."
+module load python/3.11 2>/dev/null || module load python/3.9.6 2>/dev/null || module load python 2>/dev/null
+module load cuda/12.1 2>/dev/null || module load cuda/11.8 2>/dev/null || module load cuda 2>/dev/null
+module list
+
+# Activate virtual environment
+echo -e "\n2. Activating virtual environment..."
+cd $LS_SUBCWD/..
+source venv/bin/activate
+echo "Python: $(python --version)"
+echo "Working directory: $(pwd)"
+
+# GPU info
+echo -e "\n3. GPU info:"
+python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"None\"}')"
+echo ""
+nvidia-smi
+
+# Avoid matplotlib home quota issues
+GROUP=$(groups | cut -d' ' -f1)
+export MPLCONFIGDIR="/share/$GROUP/$USER/tmp/matplotlib"
+mkdir -p "$MPLCONFIGDIR"
+
+# Run
+echo -e "\n========================================"
+echo "Starting MLP training..."
+echo "========================================"
+
+DATASET=/share/csc791003s26/cmvn/dataset-folder
+
+python scripts/train_mlp.py \
+    --config configs/default.yaml \
+    data.webqa_jsonl=$DATASET/webqa_adv.jsonl \
+    data.webqa_images_tsv=$DATASET/images/imgs.tsv \
+    data.webqa_images_lineidx=$DATASET/images/imgs.lineidx \
+    clip.device=cuda
+
+EXIT_CODE=$?
+
+echo -e "\n========================================"
+echo "Job complete!"
+echo "Exit code: $EXIT_CODE"
+echo "End time: $(date)"
+echo "========================================"
+
+exit $EXIT_CODE
