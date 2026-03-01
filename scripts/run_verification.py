@@ -10,7 +10,7 @@ import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.config import load_config, set_seed, setup_logging, ensure_dirs
+from src.config import load_config, set_seed, setup_logging, ensure_dirs, create_run_dir
 from src.experiment_tracker import ExperimentTracker
 from src.models.clip_encoder import CLIPEncoder
 from src.models.mlp_classifier import MLPClassifier
@@ -122,7 +122,7 @@ def run_threshold_verification(cfg, encoder, dataset, retriever=None):
     return oracle_metrics, e2e_metrics
 
 
-def run_mlp_verification(cfg, encoder, dataset, retriever=None):
+def run_mlp_verification(cfg, encoder, dataset, retriever=None, checkpoint_override=None):
     """Run MLP-based verification in both oracle and E2E modes."""
     test_data = dataset.get_split("test")
 
@@ -133,7 +133,7 @@ def run_mlp_verification(cfg, encoder, dataset, retriever=None):
     device = torch.device(cfg.clip.device if torch.cuda.is_available() or cfg.clip.device == "cpu" else "cpu")
     model = MLPClassifier(cfg).to(device)
 
-    checkpoint_path = os.path.join(cfg.results.checkpoints_dir, "mlp_best.pt")
+    checkpoint_path = checkpoint_override or os.path.join(cfg.results.checkpoints_dir, "mlp_best.pt")
     if not os.path.exists(checkpoint_path):
         logger.warning(f"No MLP checkpoint found at {checkpoint_path}. Run train_mlp.py first.")
         return None, None
@@ -223,10 +223,15 @@ def main():
     parser = argparse.ArgumentParser(description="Run verification evaluation")
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument("--mode", choices=["threshold", "mlp", "both"], default="both")
+    parser.add_argument("--embeddings", type=str, default=None,
+                        help="Path to pre-computed image_index.pt from a previous run")
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Path to trained mlp_best.pt from a previous run")
     parser.add_argument("overrides", nargs="*")
     args = parser.parse_args()
 
     cfg = load_config(args.config, args.overrides)
+    create_run_dir(cfg)
     setup_logging(cfg.logging.level, cfg.logging.log_dir)
     set_seed(cfg.seed)
     ensure_dirs(cfg)
@@ -250,7 +255,7 @@ def main():
 
         # Try to load retriever for E2E
         retriever = None
-        index_path = os.path.join(cfg.results.embeddings_dir, "image_index.pt")
+        index_path = args.embeddings or os.path.join(cfg.results.embeddings_dir, "image_index.pt")
         if os.path.exists(index_path):
             index = EmbeddingIndex()
             index.load(index_path)
@@ -271,7 +276,8 @@ def main():
 
         if args.mode in ("mlp", "both"):
             print("\n=== MLP-based Verification ===")
-            oracle, e2e = run_mlp_verification(cfg, encoder, dataset, retriever)
+            oracle, e2e = run_mlp_verification(cfg, encoder, dataset, retriever,
+                                               checkpoint_override=args.checkpoint)
             if oracle:
                 results["mlp_oracle_f1"] = oracle["macro_f1"]
                 if e2e:

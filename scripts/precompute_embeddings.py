@@ -3,13 +3,10 @@
 import argparse
 import os
 import sys
-from datetime import datetime
-
-import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.config import load_config, set_seed, setup_logging, ensure_dirs
+from src.config import load_config, set_seed, setup_logging, ensure_dirs, create_run_dir
 from src.experiment_tracker import ExperimentTracker
 from src.models.clip_encoder import CLIPEncoder
 from src.data.webqa_dataset import WebQADataset
@@ -23,6 +20,7 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config(args.config, args.overrides)
+    create_run_dir(cfg)
     setup_logging(cfg.logging.level, cfg.logging.log_dir)
     set_seed(cfg.seed)
     ensure_dirs(cfg)
@@ -46,10 +44,7 @@ def main():
         encoder = CLIPEncoder(cfg)
 
         # Pre-compute and save
-        gpu_name = torch.cuda.get_device_name(0).replace(" ", "_") if torch.cuda.is_available() else "cpu"
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"image_index_{gpu_name}_{timestamp}.pt"
-        save_path = os.path.join(cfg.results.embeddings_dir, filename)
+        save_path = os.path.join(cfg.results.embeddings_dir, "image_index.pt")
         precompute_embeddings(encoder, dataset, save_path, batch_size=cfg.clip.batch_size)
 
         tracker.log_results(

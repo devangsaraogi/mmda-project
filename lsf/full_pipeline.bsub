@@ -59,8 +59,13 @@ echo "========================================"
 
 DATASET=/share/csc791003s26/cmvn/dataset-folder
 
+# Set this to skip embedding computation and reuse a previous run's embeddings, e.g.:
+# EMBEDDINGS=results/runs/NVIDIA_H200_NVL_20260301_170346/embeddings/image_index.pt
+EMBEDDINGS=""
+
 python scripts/run_full_pipeline.py \
     --config configs/default.yaml \
+    ${EMBEDDINGS:+--embeddings "$EMBEDDINGS"} \
     data.webqa_jsonl=$DATASET/step0_out/webqa_adv.jsonl \
     data.webqa_images_tsv=$DATASET/images/imgs.tsv \
     data.webqa_images_lineidx=$DATASET/images/imgs.lineidx \
@@ -74,10 +79,12 @@ echo "Exit code: $EXIT_CODE"
 echo "End time: $(date)"
 echo "========================================"
 
-# Show generated files
-echo -e "\nGenerated files:"
-ls -lh results/metrics/ 2>/dev/null || echo "results/metrics/ not found"
-ls -lh results/figures/ 2>/dev/null || echo "results/figures/ not found"
-ls -lh results/experiments/ 2>/dev/null || echo "results/experiments/ not found"
+# Show generated files (find the most recent run directory)
+LATEST_RUN=$(ls -td results/runs/*/ 2>/dev/null | head -1)
+if [ -n "$LATEST_RUN" ]; then
+    echo -e "\nRun directory: $LATEST_RUN"
+    echo "Generated files:"
+    find "$LATEST_RUN" -type f | sort
+fi
 
 exit $EXIT_CODE

@@ -15,7 +15,7 @@ from sklearn.metrics import f1_score
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.config import load_config, set_seed, setup_logging, ensure_dirs
+from src.config import load_config, set_seed, setup_logging, ensure_dirs, create_run_dir
 from src.experiment_tracker import ExperimentTracker
 from src.models.clip_encoder import CLIPEncoder
 from src.models.mlp_classifier import MLPClassifier
@@ -201,6 +201,7 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config(args.config, args.overrides)
+    create_run_dir(cfg)
     setup_logging(cfg.logging.level, cfg.logging.log_dir)
     set_seed(cfg.seed)
 

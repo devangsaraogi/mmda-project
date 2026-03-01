@@ -53,8 +53,13 @@ echo "========================================"
 
 DATASET=/share/csc791003s26/cmvn/dataset-folder
 
+# Set this to a pre-computed image_index.pt from a previous run, e.g.:
+# EMBEDDINGS=results/runs/NVIDIA_H200_NVL_20260301_170346/embeddings/image_index.pt
+EMBEDDINGS=""
+
 python scripts/run_retrieval.py \
     --config configs/default.yaml \
+    ${EMBEDDINGS:+--embeddings "$EMBEDDINGS"} \
     data.webqa_jsonl=$DATASET/step0_out/webqa_adv.jsonl \
     data.webqa_images_tsv=$DATASET/images/imgs.tsv \
     data.webqa_images_lineidx=$DATASET/images/imgs.lineidx \

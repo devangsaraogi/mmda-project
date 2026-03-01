@@ -1,10 +1,43 @@
 import os
 import random
 import logging
+from datetime import datetime
 
 import numpy as np
 import torch
 from omegaconf import OmegaConf, DictConfig
+
+
+def create_run_dir(cfg: DictConfig) -> str:
+    """Create a unique run directory and rewrite all output paths to live inside it.
+
+    Directory name: results/runs/{gpu}_{YYYYMMDD_HHMMSS}/
+    All cfg.results.* and cfg.logging.* paths are updated in-place.
+
+    Returns:
+        The absolute path of the created run directory.
+    """
+    if torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_name(0).replace(" ", "_")
+    else:
+        gpu_name = "cpu"
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_name = f"{gpu_name}_{timestamp}"
+    run_dir = os.path.join(cfg.results.base_dir, "runs", run_name)
+
+    # Rewrite all output directories to be subdirs of the run directory
+    with OmegaConf.read_write(cfg):
+        cfg.results.figures_dir = os.path.join(run_dir, "figures")
+        cfg.results.metrics_dir = os.path.join(run_dir, "metrics")
+        cfg.results.embeddings_dir = os.path.join(run_dir, "embeddings")
+        cfg.results.checkpoints_dir = os.path.join(run_dir, "checkpoints")
+        cfg.results.experiments_dir = os.path.join(run_dir, "experiments")
+        cfg.logging.log_dir = os.path.join(run_dir, "logs")
+        cfg.logging.tensorboard_dir = os.path.join(run_dir, "tensorboard")
+
+    print(f"Run directory: {run_dir}")
+    return run_dir
 
 
 def load_config(config_path: str = None, overrides: list[str] = None) -> DictConfig:
