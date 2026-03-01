@@ -132,7 +132,7 @@ def precompute_embeddings(
     log_every = max(1, num_batches // 20)  # ~5% increments
     for batch_idx, i in enumerate(range(0, len(image_ids), batch_size)):
         batch_ids = image_ids[i : i + batch_size]
-        batch_images = [dataset.get_image(img_id) for img_id in batch_ids]
+        batch_images = dataset.get_images_batch(batch_ids)
         # Filter out unreadable images
         valid_pairs = [(img_id, img) for img_id, img in zip(batch_ids, batch_images) if img is not None]
         skipped += len(batch_ids) - len(valid_pairs)

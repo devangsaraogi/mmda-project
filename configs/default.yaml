@@ -13,7 +13,7 @@ clip:
   model_name: "ViT-L-14"
   pretrained: "openai"
   embed_dim: 768
-  batch_size: 64
+  batch_size: 256
   device: "cuda"
 
 retrieval:

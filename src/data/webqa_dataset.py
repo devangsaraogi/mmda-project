@@ -8,6 +8,8 @@ multi-worker DataLoaders.
 import base64
 import json
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
 import numpy as np
@@ -131,6 +133,14 @@ class WebQADataset(BaseClaimDataset):
             "misinfo_type": claim.get("manipulation_type", "true").lower(),
         }
 
+    _thread_local = threading.local()
+
+    def _get_tsv_handle(self):
+        """Return a per-thread file handle for the TSV (avoids open/close per image)."""
+        if not hasattr(self._thread_local, "tsv") or self._thread_local.tsv.closed:
+            self._thread_local.tsv = open(self._tsv_path, "rb")
+        return self._thread_local.tsv
+
     def get_image(self, image_id: str):
         """Load a single image from the TSV by its numeric ID string.
 
@@ -138,9 +148,9 @@ class WebQADataset(BaseClaimDataset):
         """
         line_num = self._id_to_line[image_id]
         offset = self._byte_offsets[line_num]
-        with open(self._tsv_path, "rb") as tsv:
-            tsv.seek(offset)
-            raw_line = tsv.readline()
+        tsv = self._get_tsv_handle()
+        tsv.seek(offset)
+        raw_line = tsv.readline()
         parts = raw_line.split(b"\t", 1)
         try:
             img_bytes = base64.b64decode(parts[1])
@@ -148,6 +158,15 @@ class WebQADataset(BaseClaimDataset):
         except Exception as e:
             logger.warning("Skipping unreadable image %s: %s", image_id, e)
             return None
+
+    def get_images_batch(self, image_ids: list[str], num_workers: int = 8) -> list:
+        """Load multiple images in parallel using threads.
+
+        Returns list of (image_id, PIL Image or None) tuples, preserving order.
+        """
+        with ThreadPoolExecutor(max_workers=num_workers) as pool:
+            images = list(pool.map(self.get_image, image_ids))
+        return images
 
     def get_all_image_ids(self) -> list[str]:
         """Return ALL image IDs from the TSV (full retrieval pool)."""
