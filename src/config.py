@@ -27,14 +27,13 @@ def create_run_dir(cfg: DictConfig) -> str:
     run_dir = os.path.join(cfg.results.base_dir, "runs", run_name)
 
     # Rewrite all output directories to be subdirs of the run directory
-    with OmegaConf.read_write(cfg):
-        cfg.results.figures_dir = os.path.join(run_dir, "figures")
-        cfg.results.metrics_dir = os.path.join(run_dir, "metrics")
-        cfg.results.embeddings_dir = os.path.join(run_dir, "embeddings")
-        cfg.results.checkpoints_dir = os.path.join(run_dir, "checkpoints")
-        cfg.results.experiments_dir = os.path.join(run_dir, "experiments")
-        cfg.logging.log_dir = os.path.join(run_dir, "logs")
-        cfg.logging.tensorboard_dir = os.path.join(run_dir, "tensorboard")
+    OmegaConf.update(cfg, "results.figures_dir", os.path.join(run_dir, "figures"))
+    OmegaConf.update(cfg, "results.metrics_dir", os.path.join(run_dir, "metrics"))
+    OmegaConf.update(cfg, "results.embeddings_dir", os.path.join(run_dir, "embeddings"))
+    OmegaConf.update(cfg, "results.checkpoints_dir", os.path.join(run_dir, "checkpoints"))
+    OmegaConf.update(cfg, "results.experiments_dir", os.path.join(run_dir, "experiments"))
+    OmegaConf.update(cfg, "logging.log_dir", os.path.join(run_dir, "logs"))
+    OmegaConf.update(cfg, "logging.tensorboard_dir", os.path.join(run_dir, "tensorboard"))
 
     print(f"Run directory: {run_dir}")
     return run_dir
