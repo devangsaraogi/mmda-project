@@ -45,6 +45,8 @@ export TORCH_HOME="$SCRATCH/.cache/torch"
 export XDG_CACHE_HOME="$SCRATCH/.cache"
 mkdir -p "$MPLCONFIGDIR" "$HF_HOME" "$TORCH_HOME"
 export PYTHONUNBUFFERED=1
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 
 # Run
 echo -e "\n========================================"
