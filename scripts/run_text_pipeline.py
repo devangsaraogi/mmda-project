@@ -208,22 +208,17 @@ def main():
             else:
                 test_oracle = oracle_results
 
-        # --- E2E mode ---
-        print("\n--- E2E mode (BM25 retrieved text evidence) ---")
-        for split_name in ["train", "val", "test"]:
-            bm25_evidence = build_text_evidence_map_bm25(
-                bm25, dataset, split=split_name, top_k=default_top_k,
-            )
-            e2e_results = nli.extract_features_batch(
-                dataset, bm25_evidence, split=split_name, top_k=default_top_k,
-            )
-
-            if split_name == "train":
-                train_e2e = e2e_results
-            elif split_name == "val":
-                val_e2e = e2e_results
-            else:
-                test_e2e = e2e_results
+        # --- E2E mode (test only — train/val reuse oracle features) ---
+        print("\n--- E2E mode (BM25 retrieved text evidence, test split only) ---")
+        bm25_evidence = build_text_evidence_map_bm25(
+            bm25, dataset, split="test", top_k=default_top_k,
+        )
+        test_e2e = nli.extract_features_batch(
+            dataset, bm25_evidence, split="test", top_k=default_top_k,
+        )
+        # Reuse oracle features for train/val (MLP trains on oracle, evaluates on E2E)
+        train_e2e = train_oracle
+        val_e2e = val_oracle
 
         # Cache NLI scores
         cache_path = os.path.join(run_dir, "nli_scores.pt")

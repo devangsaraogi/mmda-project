@@ -2,11 +2,11 @@
 #BSUB -J text-pipe
 #BSUB -o ../logs/text_pipeline_%J.out
 #BSUB -e ../logs/text_pipeline_%J.err
-#BSUB -W 2:00
+#BSUB -W 4:00
 #BSUB -q gpu
 #BSUB -gpu "num=1"
 #BSUB -n 8
-#BSUB -M 16GB
+#BSUB -M 32GB
 
 echo "========================================"
 echo "MMDA — Text-Only Pipeline"
