@@ -1,15 +1,15 @@
 #!/bin/bash
-#BSUB -J clip-verify
-#BSUB -o ../logs/verification_%J.out
-#BSUB -e ../logs/verification_%J.err
-#BSUB -W 2:00
-#BSUB -q short_gpu
+#BSUB -J mm-pipe
+#BSUB -o ../logs/multimodal_pipeline_%J.out
+#BSUB -e ../logs/multimodal_pipeline_%J.err
+#BSUB -W 4:00
+#BSUB -q gpu
 #BSUB -gpu "num=1"
 #BSUB -n 8
-#BSUB -M 16GB
+#BSUB -M 32GB
 
 echo "========================================"
-echo "MMDA — Verification Evaluation"
+echo "MMDA — Multimodal Pipeline (Visual + Text + Fusion)"
 echo "========================================"
 echo "Job ID: $LSB_JOBID"
 echo "Job Name: $LSB_JOBNAME"
@@ -36,8 +36,12 @@ python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA av
 echo ""
 nvidia-smi
 
-# Redirect caches to scratch to avoid home quota issues
+# Storage info
 GROUP=$(groups | cut -d' ' -f1)
+echo -e "\n4. Storage info:"
+df -h . | tail -1
+
+# Redirect caches to scratch
 SCRATCH="/share/$GROUP/$USER"
 export MPLCONFIGDIR="$SCRATCH/tmp/matplotlib"
 export HF_HOME="$SCRATCH/.cache/huggingface"
@@ -48,19 +52,23 @@ export PYTHONUNBUFFERED=1
 
 # Run
 echo -e "\n========================================"
-echo "Starting verification evaluation..."
+echo "Starting multimodal pipeline..."
 echo "========================================"
 
 DATASET=/share/csc791003s26/cmvn/dataset-folder
 
-# Artifacts from previous runs (Mar 1 2026):
-EMBEDDINGS=results/embeddings/image_index_NVIDIA_H200_NVL_20260301_170526.pt
-CHECKPOINT=results/runs/NVIDIA_H200_NVL_20260301_183957/checkpoints/mlp_best.pt
+# Set this to reuse pre-computed CLIP embeddings from a previous run:
+# EMBEDDINGS=results/runs/NVIDIA_H200_NVL_20260301_170346/embeddings/image_index.pt
+EMBEDDINGS=""
 
-python scripts/run_verification.py \
+# Set this to reuse pre-computed NLI scores from a text pipeline run:
+# NLI_SCORES=results/runs/<run_dir>/nli_scores.pt
+NLI_SCORES=""
+
+python scripts/run_multimodal_pipeline.py \
     --config configs/default.yaml \
     ${EMBEDDINGS:+--embeddings "$EMBEDDINGS"} \
-    ${CHECKPOINT:+--checkpoint "$CHECKPOINT"} \
+    ${NLI_SCORES:+--nli-scores "$NLI_SCORES"} \
     data.webqa_jsonl=$DATASET/step0_out/webqa_adv.jsonl \
     data.webqa_images_tsv=$DATASET/images/imgs.tsv \
     data.webqa_images_lineidx=$DATASET/images/imgs.lineidx \
@@ -69,9 +77,16 @@ python scripts/run_verification.py \
 EXIT_CODE=$?
 
 echo -e "\n========================================"
-echo "Job complete!"
+echo "Multimodal pipeline complete!"
 echo "Exit code: $EXIT_CODE"
 echo "End time: $(date)"
 echo "========================================"
+
+LATEST_RUN=$(ls -td results/runs/*/ 2>/dev/null | head -1)
+if [ -n "$LATEST_RUN" ]; then
+    echo -e "\nRun directory: $LATEST_RUN"
+    echo "Generated files:"
+    find "$LATEST_RUN" -type f | sort
+fi
 
 exit $EXIT_CODE

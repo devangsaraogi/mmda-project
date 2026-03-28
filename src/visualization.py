@@ -100,8 +100,8 @@ def plot_oracle_vs_e2e_confusion(
     labels: list[str],
     save_path: str,
 ) -> None:
-    """Side-by-side confusion matrices for oracle vs E2E."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+    """Vertically stacked confusion matrices for oracle vs E2E."""
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 10))
 
     sns.heatmap(oracle_cm, annot=True, fmt="d", cmap="Blues", xticklabels=labels, yticklabels=labels, ax=ax1)
     ax1.set_xlabel("Predicted")
@@ -113,7 +113,7 @@ def plot_oracle_vs_e2e_confusion(
     ax2.set_ylabel("Actual")
     ax2.set_title("End-to-End (Retrieved Evidence)")
 
-    fig.suptitle("Oracle vs E2E Verification", fontsize=14, y=1.02)
+    fig.suptitle("Oracle vs E2E Verification", fontsize=14)
     plt.tight_layout()
     _save_fig(fig, save_path)
 

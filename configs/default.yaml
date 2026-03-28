@@ -39,6 +39,24 @@ verification:
     early_stopping_patience: 7
     class_weights: [1.0, 0.73, 8.0]  # inverse of class ratios roughly
 
+text:
+  bm25:
+    top_k_values: [1, 3, 5, 10]
+    default_top_k: 5
+  nli:
+    model_name: "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
+    batch_size: 32
+    max_seq_length: 512
+
+fusion:
+  type: "score"  # "score" or "gated"
+  hidden_dims: [256, 128]
+  learning_rate: 0.001
+  batch_size: 64
+  num_epochs: 50
+  early_stopping_patience: 7
+  class_weights: [1.0, 0.73, 8.0]
+
 results:
   base_dir: "results"
   figures_dir: "results/figures"

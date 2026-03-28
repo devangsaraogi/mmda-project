@@ -94,6 +94,25 @@ class WebQADataset(BaseClaimDataset):
             )
 
         # ------------------------------------------------------------------
+        # 4b. Index text candidates (already embedded in the JSONL)
+        # ------------------------------------------------------------------
+        text_claims = 0
+        for claim in self._claims:
+            # Text candidates live under evidence.text_candidates or top-level
+            evidence = claim.get("evidence", {})
+            candidates = evidence.get("text_candidates", claim.get("text_candidates", []))
+            claim["_text_candidates"] = candidates
+            # Gold text IDs
+            gold = claim.get("gold", {})
+            claim["_gold_text_ids"] = [str(tid) for tid in gold.get("text_ids", [])]
+            if candidates:
+                text_claims += 1
+        logger.info(
+            "Text candidates indexed: %d/%d claims have text evidence.",
+            text_claims, len(self._claims),
+        )
+
+        # ------------------------------------------------------------------
         # 5. Compute splits via seeded shuffle
         # ------------------------------------------------------------------
         n = len(self._claims)
@@ -129,6 +148,8 @@ class WebQADataset(BaseClaimDataset):
             "claim_id": claim["id"],
             "claim_text": claim["claim"],
             "gold_image_ids": claim["_valid_gold_ids"],
+            "gold_text_ids": claim["_gold_text_ids"],
+            "text_candidates": claim["_text_candidates"],
             "label": _LABEL_MAP[claim["label"]],
             "misinfo_type": claim.get("manipulation_type", "true").lower(),
         }
@@ -215,3 +236,44 @@ class WebQADataset(BaseClaimDataset):
         copy._split_indices = self._split_indices
         copy._active_indices = self._split_indices[split]
         return copy
+
+    # ------------------------------------------------------------------
+    # Text evidence accessors
+    # ------------------------------------------------------------------
+
+    def get_text_candidates(self, claim_id: str) -> list[dict]:
+        """Return the inline text_candidates for a given claim ID."""
+        for claim in self._claims:
+            if claim["id"] == claim_id:
+                return claim["_text_candidates"]
+        return []
+
+    def get_gold_text_ids(self, claim_id: str) -> list[str]:
+        """Return gold text evidence IDs for a given claim ID."""
+        for claim in self._claims:
+            if claim["id"] == claim_id:
+                return claim["_gold_text_ids"]
+        return []
+
+    def get_candidate_text(self, candidate: dict) -> str:
+        """Extract the text string from a text_candidate dict.
+
+        Handles common field names: 'text', 'snippet', 'passage', 'body'.
+        Falls back to joining all string values.
+        """
+        for key in ("text", "snippet", "passage", "body", "content"):
+            if key in candidate:
+                return str(candidate[key])
+        # Fallback: join all string-valued fields
+        parts = []
+        for k, v in candidate.items():
+            if isinstance(v, str) and k not in ("id", "snippet_id", "txt_id"):
+                parts.append(v)
+        return " ".join(parts) if parts else ""
+
+    def get_candidate_id(self, candidate: dict) -> str:
+        """Extract the ID from a text_candidate dict."""
+        for key in ("snippet_id", "txt_id", "id", "text_id"):
+            if key in candidate:
+                return str(candidate[key])
+        return ""

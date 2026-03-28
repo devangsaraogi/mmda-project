@@ -41,9 +41,11 @@ echo -e "\n6. Installing project dependencies..."
 pip install -r requirements.txt
 pip install -e .
 
-# Step 7: Test installation
+# Step 7: Test installation + download NLTK data
 echo -e "\n7. Testing PyTorch installation..."
 python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda if torch.cuda.is_available() else \"N/A\"}')"
+echo "Downloading NLTK data..."
+python -c "import nltk; nltk.download('punkt_tab', quiet=True)" 2>/dev/null || echo "NLTK punkt_tab download skipped (will retry at runtime)"
 
 # Step 8: Create output directories
 echo -e "\n8. Creating directories..."
