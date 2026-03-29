@@ -1,0 +1,41 @@
+#!/bin/bash
+#BSUB -J explore
+#BSUB -o ../logs/manual_exploration_%J.out
+#BSUB -e ../logs/manual_exploration_%J.err
+#BSUB -W 0:30
+#BSUB -q short
+#BSUB -n 4
+#BSUB -M 16GB
+
+echo "========================================"
+echo "MMDA — Manual Data Exploration"
+echo "========================================"
+echo "Job ID: $LSB_JOBID"
+echo "Start time: $(date)"
+
+module load python/3.11 2>/dev/null || module load python/3.9.6 2>/dev/null || module load python 2>/dev/null
+
+cd $LS_SUBCWD/..
+source venv/bin/activate
+echo "Python: $(python --version)"
+
+GROUP=$(groups | cut -d' ' -f1)
+SCRATCH="/share/$GROUP/$USER"
+export MPLCONFIGDIR="$SCRATCH/tmp/matplotlib"
+export HF_HOME="$SCRATCH/.cache/huggingface"
+export TORCH_HOME="$SCRATCH/.cache/torch"
+export XDG_CACHE_HOME="$SCRATCH/.cache"
+mkdir -p "$MPLCONFIGDIR"
+export PYTHONUNBUFFERED=1
+
+DATASET=/share/csc791003s26/cmvn/dataset-folder
+
+python scripts/manual_exploration.py \
+    --config configs/default.yaml \
+    --output results/manual_exploration.json \
+    data.webqa_jsonl=$DATASET/step0_out/webqa_adv.jsonl \
+    data.webqa_images_tsv=$DATASET/images/imgs.tsv \
+    data.webqa_images_lineidx=$DATASET/images/imgs.lineidx
+
+echo "Exit code: $?"
+echo "End time: $(date)"
