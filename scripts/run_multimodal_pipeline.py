@@ -319,7 +319,9 @@ def main():
 
         device = torch.device(device_str)
         fusion_cfg = cfg.get("fusion", {})
-        fusion_type = str(fusion_cfg.get("type", "score"))
+        fusion_types_str = str(fusion_cfg.get("type", "score"))
+        # Support comma-separated fusion types, e.g. "score,gated"
+        fusion_types = [t.strip() for t in fusion_types_str.split(",")]
 
         all_metrics = {}
 
@@ -384,45 +386,48 @@ def main():
                 all_metrics[key] = m
                 print(f"  {key} — Acc: {m['accuracy']:.4f}, F1: {m['macro_f1']:.4f}")
 
-        # Multimodal fusion
-        print(f"\n--- Multimodal fusion ({fusion_type}) ---")
-        for setting_name, vis_mode, txt_mode in MULTIMODAL_SETTINGS:
-            train_aligned = align_features_by_claim_id(
-                visual_data[f"train_{vis_mode}"], text_data[f"train_{txt_mode}"]
-            )
-            val_aligned = align_features_by_claim_id(
-                visual_data[f"val_{vis_mode}"], text_data[f"val_{txt_mode}"]
-            )
-            test_aligned = align_features_by_claim_id(
-                visual_data[f"test_{vis_mode}"], text_data[f"test_{txt_mode}"]
-            )
+        # Multimodal fusion — iterate over all fusion types
+        for fusion_type in fusion_types:
+            print(f"\n--- Multimodal fusion ({fusion_type}) ---")
+            for setting_name, vis_mode, txt_mode in MULTIMODAL_SETTINGS:
+                train_aligned = align_features_by_claim_id(
+                    visual_data[f"train_{vis_mode}"], text_data[f"train_{txt_mode}"]
+                )
+                val_aligned = align_features_by_claim_id(
+                    visual_data[f"val_{vis_mode}"], text_data[f"val_{txt_mode}"]
+                )
+                test_aligned = align_features_by_claim_id(
+                    visual_data[f"test_{vis_mode}"], text_data[f"test_{txt_mode}"]
+                )
 
-            metrics, type_bd, model = train_and_evaluate_fusion(
-                train_aligned, val_aligned, test_aligned,
-                cfg, device, fusion_type=fusion_type, tag=setting_name,
-            )
+                metrics, type_bd, model = train_and_evaluate_fusion(
+                    train_aligned, val_aligned, test_aligned,
+                    cfg, device, fusion_type=fusion_type, tag=setting_name,
+                )
 
-            all_metrics[f"fusion_{setting_name}"] = metrics
-            all_metrics[f"fusion_{setting_name}_per_type"] = type_bd
+                key_prefix = f"fusion_{fusion_type}" if len(fusion_types) > 1 else "fusion"
+                metric_key = f"{key_prefix}_{setting_name}"
+                all_metrics[metric_key] = metrics
+                all_metrics[f"{metric_key}_per_type"] = type_bd
 
-            print(f"  {setting_name} — Acc: {metrics['accuracy']:.4f}, F1: {metrics['macro_f1']:.4f}")
+                print(f"  {setting_name} — Acc: {metrics['accuracy']:.4f}, F1: {metrics['macro_f1']:.4f}")
 
-            # Save per-setting metrics + visualizations
-            save_metrics(metrics, os.path.join(cfg.results.metrics_dir, f"fusion_{setting_name}.json"))
-            plot_confusion_matrix(
-                metrics["confusion_matrix"], metrics["confusion_labels"],
-                os.path.join(cfg.results.figures_dir, f"fusion_{setting_name}_cm.png"),
-                title=f"Fusion: {setting_name}",
-            )
-            plot_per_type_breakdown(
-                type_bd,
-                os.path.join(cfg.results.figures_dir, f"fusion_{setting_name}_per_type.png"),
-            )
+                # Save per-setting metrics + visualizations
+                save_metrics(metrics, os.path.join(cfg.results.metrics_dir, f"{metric_key}.json"))
+                plot_confusion_matrix(
+                    metrics["confusion_matrix"], metrics["confusion_labels"],
+                    os.path.join(cfg.results.figures_dir, f"{metric_key}_cm.png"),
+                    title=f"Fusion ({fusion_type}): {setting_name}",
+                )
+                plot_per_type_breakdown(
+                    type_bd,
+                    os.path.join(cfg.results.figures_dir, f"{metric_key}_per_type.png"),
+                )
 
-            # Save checkpoint
-            ckpt_path = os.path.join(cfg.results.checkpoints_dir, f"fusion_{setting_name}.pt")
-            os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
-            torch.save(model.state_dict(), ckpt_path)
+                # Save checkpoint
+                ckpt_path = os.path.join(cfg.results.checkpoints_dir, f"{metric_key}.pt")
+                os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
+                torch.save(model.state_dict(), ckpt_path)
 
         # === Summary ===
         print("\n" + "=" * 60)

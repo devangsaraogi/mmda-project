@@ -1,0 +1,94 @@
+#!/bin/bash
+#BSUB -J err-analysis
+#BSUB -o ../logs/error_analysis_%J.out
+#BSUB -e ../logs/error_analysis_%J.err
+#BSUB -W 2:00
+#BSUB -q gpu
+#BSUB -gpu "num=1"
+#BSUB -n 4
+#BSUB -M 16GB
+
+echo "========================================"
+echo "MMDA — Error Analysis"
+echo "========================================"
+echo "Job ID: $LSB_JOBID"
+echo "Host: $HOSTNAME"
+echo "Start time: $(date)"
+
+# Load modules
+module load python/3.11 2>/dev/null || module load python/3.9.6 2>/dev/null || module load python 2>/dev/null
+module load cuda/12.1 2>/dev/null || module load cuda/11.8 2>/dev/null || module load cuda 2>/dev/null
+
+# Activate virtual environment
+cd $LS_SUBCWD/..
+source venv/bin/activate
+echo "Python: $(python --version)"
+echo "Working directory: $(pwd)"
+
+# Redirect caches to scratch
+GROUP=$(groups | cut -d' ' -f1)
+SCRATCH="/share/$GROUP/$USER"
+export MPLCONFIGDIR="$SCRATCH/tmp/matplotlib"
+export HF_HOME="$SCRATCH/.cache/huggingface"
+export TORCH_HOME="$SCRATCH/.cache/torch"
+export XDG_CACHE_HOME="$SCRATCH/.cache"
+mkdir -p "$MPLCONFIGDIR" "$HF_HOME" "$TORCH_HOME"
+export PYTHONUNBUFFERED=1
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+DATASET=/share/csc791003s26/cmvn/dataset-folder
+
+# =============================================
+# SET THESE to the fusion run directory
+# =============================================
+FUSION_RUN_DIR=""  # e.g., results/runs/<GPU_YYYYMMDD_HHMMSS>
+
+if [ -z "$FUSION_RUN_DIR" ]; then
+    # Auto-detect: use the latest run directory
+    FUSION_RUN_DIR=$(ls -td results/runs/*/ 2>/dev/null | head -1)
+    echo "Auto-detected fusion run: $FUSION_RUN_DIR"
+fi
+
+VISUAL_FEATURES="${FUSION_RUN_DIR}/visual_features.pt"
+TEXT_FEATURES="${FUSION_RUN_DIR}/text_features.pt"
+
+if [ ! -f "$VISUAL_FEATURES" ] || [ ! -f "$TEXT_FEATURES" ]; then
+    echo "ERROR: Feature files not found in $FUSION_RUN_DIR"
+    echo "  Expected: $VISUAL_FEATURES"
+    echo "  Expected: $TEXT_FEATURES"
+    exit 1
+fi
+
+echo "Visual features: $VISUAL_FEATURES"
+echo "Text features: $TEXT_FEATURES"
+
+# Run error analysis for both modes
+for MODE in e2e oracle; do
+    echo -e "\n========================================"
+    echo "Running error analysis: mode=$MODE"
+    echo "========================================"
+
+    python scripts/run_error_analysis.py \
+        --config configs/default.yaml \
+        --visual-features "$VISUAL_FEATURES" \
+        --text-features "$TEXT_FEATURES" \
+        --mode "$MODE" \
+        data.webqa_jsonl=$DATASET/step0_out/webqa_adv.jsonl \
+        data.webqa_images_tsv=$DATASET/images/imgs.tsv \
+        data.webqa_images_lineidx=$DATASET/images/imgs.lineidx
+
+    echo "Error analysis ($MODE) exit code: $?"
+done
+
+echo -e "\n========================================"
+echo "Error analysis complete!"
+echo "End time: $(date)"
+echo "========================================"
+
+LATEST_RUN=$(ls -td results/runs/*/ 2>/dev/null | head -1)
+if [ -n "$LATEST_RUN" ]; then
+    echo -e "\nLatest run directory: $LATEST_RUN"
+    echo "Generated files:"
+    find "$LATEST_RUN" -type f | sort
+fi

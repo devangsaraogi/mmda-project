@@ -60,12 +60,10 @@ echo "========================================"
 DATASET=/share/csc791003s26/cmvn/dataset-folder
 
 # Set this to reuse pre-computed CLIP embeddings from a previous run:
-# EMBEDDINGS=results/runs/NVIDIA_H200_NVL_20260301_170346/embeddings/image_index.pt
-EMBEDDINGS=""
+EMBEDDINGS="results/runs/NVIDIA_H200_NVL_20260301_170526/embeddings/image_index.pt"
 
 # Set this to reuse pre-computed NLI scores from a text pipeline run:
-# NLI_SCORES=results/runs/<run_dir>/nli_scores.pt
-NLI_SCORES=""
+NLI_SCORES="results/runs/NVIDIA_A10_20260328_204115/nli_scores.pt"
 
 python scripts/run_multimodal_pipeline.py \
     --config configs/default.yaml \

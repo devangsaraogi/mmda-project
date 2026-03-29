@@ -49,7 +49,7 @@ text:
     max_seq_length: 512
 
 fusion:
-  type: "score"  # "score" or "gated"
+  type: "score,gated"  # comma-separated: "score", "gated", or "score,gated"
   hidden_dims: [256, 128]
   learning_rate: 0.001
   batch_size: 64
