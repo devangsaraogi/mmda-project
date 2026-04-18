@@ -154,6 +154,8 @@ def main():
                         help="Path to pre-computed NLI scores (.pt)")
     parser.add_argument("--debug", action="store_true",
                         help="Run on small subset")
+    parser.add_argument("--per-claim-retrieval", action="store_true",
+                        help="Use per-claim CLIP retrieval (dataset must carry image_candidate_ids).")
     parser.add_argument("overrides", nargs="*")
     args = parser.parse_args()
 
@@ -210,6 +212,14 @@ def main():
         retriever = CLIPRetriever(encoder, embedding_index, cfg)
         default_top_k = cfg.retrieval.default_top_k
 
+        per_claim_retrieval = bool(args.per_claim_retrieval) or bool(
+            getattr(cfg.retrieval, "per_claim", False)
+        )
+        if per_claim_retrieval:
+            print(f"  Visual E2E retrieval mode: PER-CLAIM (candidate pools from image_candidate_ids)")
+        else:
+            print(f"  Visual E2E retrieval mode: GLOBAL (full {len(dataset.get_all_image_ids())}-image pool)")
+
         visual_data = {}
         for split_name in ["train", "val", "test"]:
             split_data = dataset.get_split(split_name)
@@ -217,8 +227,11 @@ def main():
             oracle_result = visual_verify_oracle(encoder, split_data, embedding_index=embedding_index)
             visual_data[f"{split_name}_oracle"] = oracle_result
 
-            e2e_result = visual_verify_e2e(encoder, retriever, split_data, default_top_k,
-                                           embedding_index=embedding_index)
+            e2e_result = visual_verify_e2e(
+                encoder, retriever, split_data, default_top_k,
+                embedding_index=embedding_index,
+                per_claim=per_claim_retrieval,
+            )
             visual_data[f"{split_name}_e2e"] = e2e_result
 
             print(f"  {split_name}: oracle={len(oracle_result['labels'])}, e2e={len(e2e_result['labels'])}")

@@ -220,18 +220,76 @@ def verify_oracle(
     return extract_features(encoder, dataset, evidence_map, embedding_index=embedding_index)
 
 
+def build_evidence_map_per_claim(
+    retriever: CLIPRetriever,
+    dataset: BaseClaimDataset,
+    top_k: int,
+) -> dict:
+    """Build evidence map using per-claim-scoped CLIP retrieval.
+
+    Each claim is ranked only against its own ``image_candidate_ids`` pool
+    (from the enriched JSONL). Claims with an empty pool get an empty
+    evidence list --- the downstream feature extractor will see a
+    "no retrieval" feature vector, which is the honest representation of
+    "retrieval could not help this claim".
+
+    Returns:
+        Dict mapping claim_id → list of (image_id, score) tuples.
+    """
+    n = len(dataset)
+
+    claim_texts: list[str] = []
+    pools: list[list[str]] = []
+    claim_ids: list[str] = []
+    for i in range(n):
+        item = dataset[i]
+        claim_texts.append(item["claim_text"])
+        pool = [str(c) for c in item.get("image_candidate_ids", []) if c is not None]
+        pools.append(pool)
+        claim_ids.append(item["claim_id"])
+
+    logger.info("Per-claim scoped retrieval over %d claims (avg pool %.2f)...",
+                n, float(np.mean([len(p) for p in pools])) if pools else 0.0)
+    all_results = retriever.retrieve_scoped_batch(claim_texts, pools, top_k=top_k)
+
+    evidence_map = {}
+    empty_pool_claims = 0
+    for i in range(n):
+        evidence_map[claim_ids[i]] = all_results[i]
+        if not all_results[i]:
+            empty_pool_claims += 1
+    logger.info("Per-claim retrieval complete (empty-pool claims: %d/%d).",
+                empty_pool_claims, n)
+    return evidence_map
+
+
 def verify_e2e(
     encoder: CLIPEncoder,
     retriever: CLIPRetriever,
     dataset: BaseClaimDataset,
     top_k: int,
     embedding_index: EmbeddingIndex = None,
+    per_claim: bool = False,
 ) -> dict:
     """Run end-to-end verification with retrieved evidence.
+
+    Args:
+        encoder: CLIP encoder.
+        retriever: CLIPRetriever instance.
+        dataset: Dataset to evaluate.
+        top_k: Number of images to retrieve per claim.
+        embedding_index: Optional pre-computed image embedding index.
+        per_claim: If True, use per-claim candidate-pool scoping (requires
+            ``image_candidate_ids`` in dataset items). If False, rank
+            against the full global pool (midterm behaviour).
 
     Returns:
         Feature extraction results dict.
     """
-    logger.info(f"Running E2E verification (top-{top_k} retrieved evidence)...")
-    evidence_map = build_evidence_map_retrieved(retriever, dataset, top_k)
+    mode = "per-claim" if per_claim else "global"
+    logger.info(f"Running E2E verification (top-{top_k} retrieved evidence, {mode} pool)...")
+    if per_claim:
+        evidence_map = build_evidence_map_per_claim(retriever, dataset, top_k)
+    else:
+        evidence_map = build_evidence_map_retrieved(retriever, dataset, top_k)
     return extract_features(encoder, dataset, evidence_map, embedding_index=embedding_index)
