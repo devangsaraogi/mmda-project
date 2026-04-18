@@ -328,24 +328,29 @@ def evaluate_retrieval(
     return recall_at_k
 
 
+def _mean_scores(scores: list[float]) -> float:
+    return float(np.mean(scores)) if scores else 0.0
+
+
 def evaluate_retrieval_scoped(
     retriever: CLIPRetriever,
     dataset: BaseClaimDataset,
     top_k_values: list[int],
 ) -> dict:
-    """Evaluate per-claim scoped retrieval with Recall@K.
+    """Evaluate per-claim scoped retrieval with Recall@K over three subsets.
 
     Each dataset item is expected to provide ``image_candidate_ids`` —
     the per-claim candidate pool built by ``enrich_webqa_adv_candidates.py``.
-    Claims with an empty or fully-missing candidate pool count as misses.
 
-    Args:
-        retriever: CLIPRetriever instance (retrieve_scoped_batch is used).
-        dataset: Dataset with gold image IDs and candidate IDs.
-        top_k_values: List of K values to evaluate.
-
-    Returns:
-        Dict containing Recall@K plus pool-coverage diagnostics.
+    Returns recall sliced three ways so the headline numbers are apples-to-apples:
+      * ``recall_at_k``                  — all claims (standard denominator).
+      * ``recall_at_k_has_gold``         — only claims with non-empty gold_image_ids
+                                           (excludes Unverifiable claims where
+                                           visual retrieval has nothing to hit).
+      * ``recall_at_k_gold_in_pool``     — only claims where at least one gold
+                                           image is present in the candidate pool
+                                           (this is the achievable upper bound
+                                           for per-claim retrieval).
     """
     max_k = max(top_k_values)
     n = len(dataset)
@@ -354,8 +359,9 @@ def evaluate_retrieval_scoped(
     claim_texts: list[str] = []
     pools: list[list[str]] = []
     gold_sets: list[set[str]] = []
+    has_gold_mask: list[bool] = []
+    gold_in_pool_mask: list[bool] = []
     pool_sizes: list[int] = []
-    gold_in_pool_hits = 0
     empty_pool_claims = 0
 
     for i in range(n):
@@ -368,38 +374,59 @@ def evaluate_retrieval_scoped(
             empty_pool_claims += 1
         gold = set(str(g) for g in item["gold_image_ids"])
         gold_sets.append(gold)
-        if gold and (gold & set(pool)):
-            gold_in_pool_hits += 1
+        has_gold_mask.append(bool(gold))
+        gold_in_pool_mask.append(bool(gold) and bool(gold & set(pool)))
 
     all_results = retriever.retrieve_scoped_batch(claim_texts, pools, top_k=max_k)
 
     recall_scores = {k: [] for k in top_k_values}
+    recall_has_gold = {k: [] for k in top_k_values}
+    recall_in_pool = {k: [] for k in top_k_values}
     log_every = max(1, n // 20)
+
     for i in range(n):
         results = all_results[i]
         gold_ids = gold_sets[i]
         for k in top_k_values:
             top_k_ids = {r[0] for r in results[:k]}
             hit = bool(gold_ids) and len(top_k_ids & gold_ids) > 0
-            recall_scores[k].append(float(hit))
+            hit_f = float(hit)
+            recall_scores[k].append(hit_f)
+            if has_gold_mask[i]:
+                recall_has_gold[k].append(hit_f)
+            if gold_in_pool_mask[i]:
+                recall_in_pool[k].append(hit_f)
         if (i + 1) % log_every == 0 or (i + 1) == n:
             logger.info(_progress_bar(i + 1, n, "Scoped retrieval"))
 
-    recall_at_k = {k: float(np.mean(scores)) for k, scores in recall_scores.items()}
+    recall_at_k = {k: _mean_scores(s) for k, s in recall_scores.items()}
+    recall_at_k_has_gold = {k: _mean_scores(s) for k, s in recall_has_gold.items()}
+    recall_at_k_gold_in_pool = {k: _mean_scores(s) for k, s in recall_in_pool.items()}
+
     avg_pool_size = float(np.mean(pool_sizes)) if pool_sizes else 0.0
-    coverage = gold_in_pool_hits / n if n else 0.0
+    n_has_gold = int(sum(has_gold_mask))
+    n_gold_in_pool = int(sum(gold_in_pool_mask))
+    coverage = n_gold_in_pool / n if n else 0.0
 
     for k, r in sorted(recall_at_k.items()):
-        logger.info(f"ScopedRecall@{k}: {r:.4f}")
-    logger.info(f"Avg candidate pool size: {avg_pool_size:.2f}")
-    logger.info(f"Gold-in-pool coverage:   {coverage:.4f}  "
-                f"(claims with at least one gold image in the candidate pool)")
-    logger.info(f"Empty pools:             {empty_pool_claims}/{n}")
+        logger.info(f"ScopedRecall@{k} (all):            {r:.4f}")
+    for k, r in sorted(recall_at_k_has_gold.items()):
+        logger.info(f"ScopedRecall@{k} (has gold):       {r:.4f}")
+    for k, r in sorted(recall_at_k_gold_in_pool.items()):
+        logger.info(f"ScopedRecall@{k} (gold in pool):   {r:.4f}")
+    logger.info(f"Avg candidate pool size:           {avg_pool_size:.2f}")
+    logger.info(f"n_total / n_has_gold / n_in_pool:  {n} / {n_has_gold} / {n_gold_in_pool}")
+    logger.info(f"Gold-in-pool coverage:             {coverage:.4f}")
+    logger.info(f"Empty pools:                       {empty_pool_claims}/{n}")
 
     return {
         "recall_at_k": recall_at_k,
+        "recall_at_k_has_gold": recall_at_k_has_gold,
+        "recall_at_k_gold_in_pool": recall_at_k_gold_in_pool,
         "avg_pool_size": avg_pool_size,
         "gold_in_pool_coverage": coverage,
         "empty_pool_claims": empty_pool_claims,
-        "n": n,
+        "n_total": n,
+        "n_has_gold": n_has_gold,
+        "n_gold_in_pool": n_gold_in_pool,
     }

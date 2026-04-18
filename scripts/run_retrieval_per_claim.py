@@ -5,15 +5,21 @@ only within each claim's ~10 candidate images instead of the 390K-image
 global pool. Reuses the existing global CLIP embedding index — no
 re-embedding needed.
 
-Reports Recall@K, average candidate-pool size, and the fraction of claims
-whose gold image is present in the candidate pool (an oracle ceiling on
-what per-claim retrieval can possibly recover).
+Reports Recall@K sliced three ways:
+  * over all test claims,
+  * over claims that have at least one gold image (excludes Unverifiable),
+  * over claims whose gold is actually in the candidate pool (the ceiling).
+
+Comparable slices are produced for the global-pool baseline.
 """
+from __future__ import annotations
 
 import argparse
 import os
 import sys
 import json
+
+import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -24,7 +30,6 @@ from src.data.webqa_dataset import WebQADataset
 from src.retrieval import (
     EmbeddingIndex,
     CLIPRetriever,
-    evaluate_retrieval,
     evaluate_retrieval_scoped,
 )
 from src.evaluation import save_metrics
@@ -83,13 +88,56 @@ def main():
             "per_claim": scoped,
         }
 
-        # ---- Optional: also run global retrieval so results tables show both ----
+        # ---- Optional: also run global retrieval on the SAME claim subsets
+        #      so per-claim vs global is apples-to-apples ----
         if args.also_global:
             print("Running global retrieval for comparison...")
-            global_recall = evaluate_retrieval(retriever, test_data, cfg.retrieval.top_k_values)
+            n = len(test_data)
+            max_k = max(cfg.retrieval.top_k_values)
+
+            claim_texts = [test_data[i]["claim_text"] for i in range(n)]
+            all_results = retriever.retrieve_batch(claim_texts, top_k=max_k)
+
+            # Build the same masks used by evaluate_retrieval_scoped so the
+            # recall subsets match up between global and per-claim.
+            has_gold_mask: list[bool] = []
+            gold_in_pool_mask: list[bool] = []
+            gold_sets: list[set[str]] = []
+            for i in range(n):
+                item = test_data[i]
+                pool = {str(c) for c in item.get("image_candidate_ids", []) if c is not None}
+                gold = {str(g) for g in item["gold_image_ids"]}
+                gold_sets.append(gold)
+                has_gold_mask.append(bool(gold))
+                gold_in_pool_mask.append(bool(gold) and bool(gold & pool))
+
+            global_recall_all = {k: [] for k in cfg.retrieval.top_k_values}
+            global_recall_has_gold = {k: [] for k in cfg.retrieval.top_k_values}
+            global_recall_in_pool = {k: [] for k in cfg.retrieval.top_k_values}
+            for i in range(n):
+                results = all_results[i]
+                gold = gold_sets[i]
+                for k in cfg.retrieval.top_k_values:
+                    top_k_ids = {r[0] for r in results[:k]}
+                    hit = bool(gold) and len(top_k_ids & gold) > 0
+                    hit_f = float(hit)
+                    global_recall_all[k].append(hit_f)
+                    if has_gold_mask[i]:
+                        global_recall_has_gold[k].append(hit_f)
+                    if gold_in_pool_mask[i]:
+                        global_recall_in_pool[k].append(hit_f)
+
+            def _mean(seq):
+                return float(np.mean(seq)) if seq else 0.0
+
             metrics_out["global"] = {
-                "recall_at_k": global_recall,
+                "recall_at_k": {k: _mean(s) for k, s in global_recall_all.items()},
+                "recall_at_k_has_gold": {k: _mean(s) for k, s in global_recall_has_gold.items()},
+                "recall_at_k_gold_in_pool": {k: _mean(s) for k, s in global_recall_in_pool.items()},
                 "image_pool_size": len(dataset.get_all_image_ids()),
+                "n_total": n,
+                "n_has_gold": int(sum(has_gold_mask)),
+                "n_gold_in_pool": int(sum(gold_in_pool_mask)),
             }
 
         save_metrics(
@@ -104,12 +152,18 @@ def main():
         )
 
         tracker_fields = {f"per_claim_recall@{k}": v for k, v in scoped["recall_at_k"].items()}
+        tracker_fields.update(
+            {f"per_claim_recall_in_pool@{k}": v for k, v in scoped["recall_at_k_gold_in_pool"].items()}
+        )
         tracker_fields["avg_pool_size"] = scoped["avg_pool_size"]
         tracker_fields["gold_in_pool_coverage"] = scoped["gold_in_pool_coverage"]
-        tracker_fields["empty_pool_claims"] = scoped["empty_pool_claims"]
+        tracker_fields["n_has_gold"] = scoped["n_has_gold"]
+        tracker_fields["n_gold_in_pool"] = scoped["n_gold_in_pool"]
         if args.also_global:
             for k, v in metrics_out["global"]["recall_at_k"].items():
                 tracker_fields[f"global_recall@{k}"] = v
+            for k, v in metrics_out["global"]["recall_at_k_gold_in_pool"].items():
+                tracker_fields[f"global_recall_in_pool@{k}"] = v
         tracker.log_results(**tracker_fields)
         tracker.complete()
 
@@ -117,16 +171,22 @@ def main():
         tracker.fail(str(e))
         raise
 
-    print("=" * 50)
-    print("Per-claim retrieval evaluation complete")
-    for k, r in sorted(scoped["recall_at_k"].items()):
-        print(f"  ScopedRecall@{k}: {r:.4f}")
-    print(f"  avg pool size: {scoped['avg_pool_size']:.2f}")
-    print(f"  gold-in-pool:  {scoped['gold_in_pool_coverage']:.4f}")
-    if args.also_global:
-        print("--- global retrieval (for comparison) ---")
-        for k, r in sorted(metrics_out["global"]["recall_at_k"].items()):
-            print(f"  GlobalRecall@{k}: {r:.4f}")
+    print("=" * 60)
+    print(f"Per-claim retrieval | n_total={scoped['n_total']} "
+          f"n_has_gold={scoped['n_has_gold']} n_in_pool={scoped['n_gold_in_pool']}")
+    print(f"Avg pool size: {scoped['avg_pool_size']:.2f}  "
+          f"Gold-in-pool coverage: {scoped['gold_in_pool_coverage']:.4f}")
+    print("-" * 60)
+    print(f"{'K':>4}  {'per-claim (all)':>18}  {'per-claim (in-pool)':>22}" +
+          ("  {:>18}".format("global (all)") if args.also_global else "") +
+          ("  {:>22}".format("global (in-pool)") if args.also_global else ""))
+    for k in sorted(scoped["recall_at_k"].keys()):
+        row = f"{k:>4}  {scoped['recall_at_k'][k]:>18.4f}  {scoped['recall_at_k_gold_in_pool'][k]:>22.4f}"
+        if args.also_global:
+            row += f"  {metrics_out['global']['recall_at_k'][k]:>18.4f}"
+            row += f"  {metrics_out['global']['recall_at_k_gold_in_pool'][k]:>22.4f}"
+        print(row)
+    print("=" * 60)
 
 
 if __name__ == "__main__":
