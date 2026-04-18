@@ -1,10 +1,10 @@
 #!/bin/bash
 #BSUB -J clip-verify
-#BSUB -o ../logs/verification_%J.out
-#BSUB -e ../logs/verification_%J.err
+#BSUB -o logs/verification_%J.out
+#BSUB -e logs/verification_%J.err
 #BSUB -W 2:00
 #BSUB -q short_gpu
-#BSUB -gpu "num=1"
+#BSUB -gpu "num=1:j_exclusive=yes"
 #BSUB -n 8
 #BSUB -M 16GB
 
@@ -25,7 +25,17 @@ module list
 
 # Activate virtual environment
 echo -e "\n2. Activating virtual environment..."
-cd $LS_SUBCWD/..
+# Robust to submitting from either mmda-project/ or mmda-project/lsf/
+if [ -f "$LS_SUBCWD/setup.py" ]; then
+    PROJECT_ROOT="$LS_SUBCWD"
+elif [ -f "$LS_SUBCWD/../setup.py" ]; then
+    PROJECT_ROOT="$(cd "$LS_SUBCWD/.." && pwd)"
+else
+    echo "ERROR: could not locate project root (setup.py) from LS_SUBCWD=$LS_SUBCWD" >&2
+    exit 2
+fi
+cd "$PROJECT_ROOT"
+mkdir -p logs
 source venv/bin/activate
 echo "Python: $(python --version)"
 echo "Working directory: $(pwd)"
