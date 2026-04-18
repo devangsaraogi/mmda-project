@@ -39,7 +39,7 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 
 from .retrieval import CLIPRetriever
-from .retrieval_text import BM25Retriever  # reuses the tokeniser
+from .retrieval_text import _tokenize as bm25_tokenize  # module-level tokeniser
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +60,10 @@ class CaptionBM25Retriever:
 
     def __init__(self, default_top_k: int = 5):
         self.default_top_k = default_top_k
-        # Reuse BM25Retriever's _tokenize so text-side and caption-side
-        # tokenisation stay identical.
-        self._tokenize = BM25Retriever()._tokenize
+        # Reuse the module-level tokeniser used for per-claim BM25 over
+        # text_candidates, so caption-side and text-side tokenisation stay
+        # identical (lowercase + NLTK word_tokenize with a split fallback).
+        self._tokenize = bm25_tokenize
 
     def rank(
         self,
