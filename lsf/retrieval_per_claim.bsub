@@ -1,0 +1,101 @@
+#!/bin/bash
+#BSUB -J clip-perclaim
+#BSUB -o ../logs/retrieval_per_claim_%J.out
+#BSUB -e ../logs/retrieval_per_claim_%J.err
+#BSUB -W 1:30
+#BSUB -q short_gpu
+#BSUB -gpu "num=1"
+#BSUB -n 8
+#BSUB -M 16GB
+
+echo "========================================"
+echo "MMDA — Per-Claim Retrieval (Final Paper)"
+echo "========================================"
+echo "Job ID: $LSB_JOBID"
+echo "Job Name: $LSB_JOBNAME"
+echo "Queue: $LSB_QUEUE"
+echo "Host: $HOSTNAME"
+echo "Start time: $(date)"
+
+# Load modules
+echo -e "\n1. Loading modules..."
+module load python/3.11 2>/dev/null || module load python/3.9.6 2>/dev/null || module load python 2>/dev/null
+module load cuda/12.1 2>/dev/null || module load cuda/11.8 2>/dev/null || module load cuda 2>/dev/null
+module list
+
+# Activate virtual environment
+echo -e "\n2. Activating virtual environment..."
+cd $LS_SUBCWD/..
+source venv/bin/activate
+echo "Python: $(python --version)"
+echo "Working directory: $(pwd)"
+
+# GPU info
+echo -e "\n3. GPU info:"
+python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"None\"}')"
+echo ""
+nvidia-smi
+
+# Redirect caches to scratch to avoid home quota issues
+GROUP=$(groups | cut -d' ' -f1)
+SCRATCH="/share/$GROUP/$USER"
+export MPLCONFIGDIR="$SCRATCH/tmp/matplotlib"
+export HF_HOME="$SCRATCH/.cache/huggingface"
+export TORCH_HOME="$SCRATCH/.cache/torch"
+export XDG_CACHE_HOME="$SCRATCH/.cache"
+mkdir -p "$MPLCONFIGDIR" "$HF_HOME" "$TORCH_HOME"
+export PYTHONUNBUFFERED=1
+
+DATASET=/share/csc791003s26/cmvn/dataset-folder
+ADV_IN=$DATASET/step0_out/webqa_adv.jsonl
+ADV_OUT=$DATASET/step0_out/webqa_adv_with_candidates.jsonl
+WEBQA_ORIG=$DATASET/extracted_webqa_data/WebQA_train_val.json
+
+# --- Step 1: enrich the JSONL once (idempotent — skip if already present) ---
+echo -e "\n4. Enriching webqa_adv.jsonl with per-claim image candidate IDs..."
+if [ -s "$ADV_OUT" ]; then
+    echo "  Found existing $ADV_OUT — skipping enrichment (delete it to regenerate)."
+else
+    python scripts/enrich_webqa_adv_candidates.py \
+        --adv-in "$ADV_IN" \
+        --webqa "$WEBQA_ORIG" \
+        --out "$ADV_OUT"
+    ENRICH_EXIT=$?
+    if [ $ENRICH_EXIT -ne 0 ]; then
+        echo "ERROR: enrichment failed (exit $ENRICH_EXIT)"
+        exit $ENRICH_EXIT
+    fi
+fi
+
+# --- Step 2: reuse the most recent pre-computed CLIP image index ---
+# The global retrieval runs already dropped an image_index.pt under
+# results/runs/*/embeddings/. Pick the most recent one so we don't
+# re-embed 390K images.
+echo -e "\n5. Locating existing CLIP image index..."
+EMBEDDINGS=$(ls -t results/runs/*/embeddings/image_index.pt 2>/dev/null | head -n 1)
+if [ -z "$EMBEDDINGS" ]; then
+    echo "  No pre-computed index found — script will compute one (slow!)."
+else
+    echo "  Using $EMBEDDINGS"
+fi
+
+# --- Step 3: run per-claim evaluation (and global side-by-side) ---
+echo -e "\n6. Running per-claim retrieval evaluation..."
+python scripts/run_retrieval_per_claim.py \
+    --config configs/default.yaml \
+    --also-global \
+    ${EMBEDDINGS:+--embeddings "$EMBEDDINGS"} \
+    data.webqa_jsonl=$ADV_OUT \
+    data.webqa_images_tsv=$DATASET/images/imgs.tsv \
+    data.webqa_images_lineidx=$DATASET/images/imgs.lineidx \
+    clip.device=cuda
+
+EXIT_CODE=$?
+
+echo -e "\n========================================"
+echo "Job complete!"
+echo "Exit code: $EXIT_CODE"
+echo "End time: $(date)"
+echo "========================================"
+
+exit $EXIT_CODE

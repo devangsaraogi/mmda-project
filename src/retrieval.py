@@ -74,6 +74,11 @@ class CLIPRetriever:
         self.encoder = encoder
         self.index = index
         self.default_top_k = cfg.retrieval.default_top_k
+        self._id_to_idx: dict[str, int] | None = None  # built lazily for scoped search
+
+    def _ensure_id_lookup(self) -> None:
+        if self._id_to_idx is None:
+            self._id_to_idx = {iid: i for i, iid in enumerate(self.index.image_ids)}
 
     def retrieve(self, claim_text: str, top_k: int = None) -> list[tuple[str, float]]:
         """Retrieve top-K images for a single claim.
@@ -104,6 +109,93 @@ class CLIPRetriever:
         results = []
         for i in range(len(claims)):
             results.append(self.index.search(text_embs[i], k))
+        return results
+
+    def retrieve_scoped(
+        self,
+        claim_text: str,
+        candidate_ids: list[str],
+        top_k: int | None = None,
+    ) -> list[tuple[str, float]]:
+        """Retrieve top-K images from a per-claim candidate pool.
+
+        Reuses the existing global embedding index — pulls the rows for
+        ``candidate_ids`` and ranks only within that subset. Candidates
+        missing from the index are silently dropped.
+
+        Args:
+            claim_text: The claim to find evidence for.
+            candidate_ids: Restricted pool of image IDs (per-claim).
+            top_k: Number of results (defaults to config value).
+
+        Returns:
+            List of (image_id, similarity_score) tuples, descending by score.
+            Empty list if no candidate IDs match the index.
+        """
+        k = top_k or self.default_top_k
+        if not candidate_ids:
+            return []
+        self._ensure_id_lookup()
+        valid_pairs: list[tuple[str, int]] = []
+        for iid in candidate_ids:
+            s = str(iid)
+            idx = self._id_to_idx.get(s)
+            if idx is not None:
+                valid_pairs.append((s, idx))
+        if not valid_pairs:
+            return []
+        valid_ids = [p[0] for p in valid_pairs]
+        row_indices = torch.tensor([p[1] for p in valid_pairs], dtype=torch.long)
+        cand_embeds = self.index.embeddings.index_select(0, row_indices)  # [M, D]
+        text_emb = self.encoder.encode_texts([claim_text]).squeeze(0).float()  # [D]
+        sims = (cand_embeds @ text_emb)  # [M]
+        k_eff = min(k, len(valid_ids))
+        values, top_indices = torch.topk(sims, k_eff)
+        return [(valid_ids[idx], val.item()) for idx, val in zip(top_indices.tolist(), values)]
+
+    def retrieve_scoped_batch(
+        self,
+        claims: list[str],
+        candidate_ids_per_claim: list[list[str]],
+        top_k: int | None = None,
+    ) -> list[list[tuple[str, float]]]:
+        """Per-claim scoped retrieval over a batch of claims.
+
+        Encodes all claims in one pass, then ranks each claim against its
+        own candidate pool. Claims with no valid candidate IDs yield [].
+        """
+        if len(claims) != len(candidate_ids_per_claim):
+            raise ValueError(
+                f"claims ({len(claims)}) and candidate_ids_per_claim "
+                f"({len(candidate_ids_per_claim)}) length mismatch"
+            )
+        k = top_k or self.default_top_k
+        self._ensure_id_lookup()
+        text_embs = self.encoder.encode_texts(claims).float()  # [B, D]
+
+        results: list[list[tuple[str, float]]] = []
+        for i, cand_ids in enumerate(candidate_ids_per_claim):
+            if not cand_ids:
+                results.append([])
+                continue
+            valid_pairs: list[tuple[str, int]] = []
+            for iid in cand_ids:
+                s = str(iid)
+                idx = self._id_to_idx.get(s)
+                if idx is not None:
+                    valid_pairs.append((s, idx))
+            if not valid_pairs:
+                results.append([])
+                continue
+            valid_ids = [p[0] for p in valid_pairs]
+            row_indices = torch.tensor([p[1] for p in valid_pairs], dtype=torch.long)
+            cand_embeds = self.index.embeddings.index_select(0, row_indices)  # [M, D]
+            sims = (cand_embeds @ text_embs[i])  # [M]
+            k_eff = min(k, len(valid_ids))
+            values, top_indices = torch.topk(sims, k_eff)
+            results.append(
+                [(valid_ids[idx], val.item()) for idx, val in zip(top_indices.tolist(), values)]
+            )
         return results
 
 
@@ -231,3 +323,80 @@ def evaluate_retrieval(
         logger.info(f"Recall@{k}: {r:.4f}")
 
     return recall_at_k
+
+
+def evaluate_retrieval_scoped(
+    retriever: CLIPRetriever,
+    dataset: BaseClaimDataset,
+    top_k_values: list[int],
+) -> dict:
+    """Evaluate per-claim scoped retrieval with Recall@K.
+
+    Each dataset item is expected to provide ``image_candidate_ids`` —
+    the per-claim candidate pool built by ``enrich_webqa_adv_candidates.py``.
+    Claims with an empty or fully-missing candidate pool count as misses.
+
+    Args:
+        retriever: CLIPRetriever instance (retrieve_scoped_batch is used).
+        dataset: Dataset with gold image IDs and candidate IDs.
+        top_k_values: List of K values to evaluate.
+
+    Returns:
+        Dict containing Recall@K plus pool-coverage diagnostics.
+    """
+    max_k = max(top_k_values)
+    n = len(dataset)
+
+    logger.info("Batch encoding %d claim texts (scoped retrieval)...", n)
+    claim_texts: list[str] = []
+    pools: list[list[str]] = []
+    gold_sets: list[set[str]] = []
+    pool_sizes: list[int] = []
+    gold_in_pool_hits = 0
+    empty_pool_claims = 0
+
+    for i in range(n):
+        item = dataset[i]
+        claim_texts.append(item["claim_text"])
+        pool = [str(c) for c in item.get("image_candidate_ids", []) if c is not None]
+        pools.append(pool)
+        pool_sizes.append(len(pool))
+        if not pool:
+            empty_pool_claims += 1
+        gold = set(str(g) for g in item["gold_image_ids"])
+        gold_sets.append(gold)
+        if gold and (gold & set(pool)):
+            gold_in_pool_hits += 1
+
+    all_results = retriever.retrieve_scoped_batch(claim_texts, pools, top_k=max_k)
+
+    recall_scores = {k: [] for k in top_k_values}
+    log_every = max(1, n // 20)
+    for i in range(n):
+        results = all_results[i]
+        gold_ids = gold_sets[i]
+        for k in top_k_values:
+            top_k_ids = {r[0] for r in results[:k]}
+            hit = bool(gold_ids) and len(top_k_ids & gold_ids) > 0
+            recall_scores[k].append(float(hit))
+        if (i + 1) % log_every == 0 or (i + 1) == n:
+            logger.info(_progress_bar(i + 1, n, "Scoped retrieval"))
+
+    recall_at_k = {k: float(np.mean(scores)) for k, scores in recall_scores.items()}
+    avg_pool_size = float(np.mean(pool_sizes)) if pool_sizes else 0.0
+    coverage = gold_in_pool_hits / n if n else 0.0
+
+    for k, r in sorted(recall_at_k.items()):
+        logger.info(f"ScopedRecall@{k}: {r:.4f}")
+    logger.info(f"Avg candidate pool size: {avg_pool_size:.2f}")
+    logger.info(f"Gold-in-pool coverage:   {coverage:.4f}  "
+                f"(claims with at least one gold image in the candidate pool)")
+    logger.info(f"Empty pools:             {empty_pool_claims}/{n}")
+
+    return {
+        "recall_at_k": recall_at_k,
+        "avg_pool_size": avg_pool_size,
+        "gold_in_pool_coverage": coverage,
+        "empty_pool_claims": empty_pool_claims,
+        "n": n,
+    }

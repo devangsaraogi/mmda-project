@@ -113,6 +113,33 @@ class WebQADataset(BaseClaimDataset):
         )
 
         # ------------------------------------------------------------------
+        # 4c. Per-claim image candidate IDs (from enrich_webqa_adv_candidates.py)
+        # ------------------------------------------------------------------
+        img_cand_claims = 0
+        missing_img_cands = 0
+        for claim in self._claims:
+            # New enriched field (preferred)
+            cand_ids = claim.get("image_candidate_ids", [])
+            # Back-compat: fall back to pos+neg if only those are present
+            if not cand_ids:
+                pos = claim.get("image_candidate_pos_ids", [])
+                neg = claim.get("image_candidate_neg_ids", [])
+                cand_ids = list(pos) + list(neg)
+            # Keep only candidates that are in the TSV index (dropping
+            # out-of-index ones avoids mismatched retrieval)
+            valid_cand_ids = [str(iid) for iid in cand_ids if str(iid) in self._id_to_line]
+            if cand_ids and not valid_cand_ids:
+                missing_img_cands += 1
+            claim["_image_candidate_ids"] = valid_cand_ids
+            if valid_cand_ids:
+                img_cand_claims += 1
+        logger.info(
+            "Image candidates indexed: %d/%d claims have per-claim image pools "
+            "(dropped %d claims whose candidates were entirely missing from the TSV).",
+            img_cand_claims, len(self._claims), missing_img_cands,
+        )
+
+        # ------------------------------------------------------------------
         # 5. Compute splits via seeded shuffle
         # ------------------------------------------------------------------
         n = len(self._claims)
@@ -150,6 +177,7 @@ class WebQADataset(BaseClaimDataset):
             "gold_image_ids": claim["_valid_gold_ids"],
             "gold_text_ids": claim["_gold_text_ids"],
             "text_candidates": claim["_text_candidates"],
+            "image_candidate_ids": claim.get("_image_candidate_ids", []),
             "label": _LABEL_MAP[claim["label"]],
             "misinfo_type": claim.get("manipulation_type", "true").lower(),
         }
@@ -236,6 +264,17 @@ class WebQADataset(BaseClaimDataset):
         copy._split_indices = self._split_indices
         copy._active_indices = self._split_indices[split]
         return copy
+
+    # ------------------------------------------------------------------
+    # Image-candidate accessor
+    # ------------------------------------------------------------------
+
+    def get_image_candidate_ids(self, claim_id: str) -> list[str]:
+        """Return the per-claim image candidate IDs (validated against the TSV)."""
+        for claim in self._claims:
+            if claim["id"] == claim_id:
+                return claim.get("_image_candidate_ids", [])
+        return []
 
     # ------------------------------------------------------------------
     # Text evidence accessors
