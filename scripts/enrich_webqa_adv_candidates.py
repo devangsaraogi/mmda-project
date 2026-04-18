@@ -49,6 +49,31 @@ def ids_from_facts(facts) -> list[str]:
     return out
 
 
+def metadata_from_facts(facts) -> list[dict]:
+    """Extract {id, title, caption} metadata for each image fact.
+
+    Kept alongside the raw ID list so downstream caption-BM25 retrieval
+    can score claim-vs-caption without a second join.
+    """
+    out = []
+    if not isinstance(facts, list):
+        return out
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        iid = fact.get("image_id")
+        if iid is None:
+            continue
+        title = fact.get("title") or ""
+        caption = fact.get("caption") or ""
+        out.append({
+            "id": str(iid),
+            "title": str(title).strip(),
+            "caption": str(caption).strip(),
+        })
+    return out
+
+
 def enrich(adv_in: Path, webqa_path: Path, out: Path) -> None:
     orig = load_webqa_originals(webqa_path)
 
@@ -74,11 +99,15 @@ def enrich(adv_in: Path, webqa_path: Path, out: Path) -> None:
                 orig_rec = orig[src_id]
                 pos_ids = ids_from_facts(orig_rec.get("img_posFacts"))
                 neg_ids = ids_from_facts(orig_rec.get("img_negFacts"))
+                pos_meta = metadata_from_facts(orig_rec.get("img_posFacts"))
+                neg_meta = metadata_from_facts(orig_rec.get("img_negFacts"))
                 enriched += 1
             elif src_id:
                 missing += 1
+                pos_meta, neg_meta = [], []
             else:
                 missing += 1
+                pos_meta, neg_meta = [], []
 
             if not pos_ids and not neg_ids:
                 no_candidates += 1
@@ -97,6 +126,17 @@ def enrich(adv_in: Path, webqa_path: Path, out: Path) -> None:
                 seen.add(iid)
                 combined.append(iid)
             obj["image_candidate_ids"] = combined
+
+            # Per-claim image metadata for caption-BM25 retrieval (dedup by id,
+            # preserving positives-first order).
+            seen_meta: set[str] = set()
+            combined_meta: list[dict] = []
+            for m in pos_meta + neg_meta:
+                if m["id"] in seen_meta:
+                    continue
+                seen_meta.add(m["id"])
+                combined_meta.append(m)
+            obj["image_candidate_metadata"] = combined_meta
 
             fout.write(json.dumps(obj) + "\n")
 

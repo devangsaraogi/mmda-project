@@ -133,6 +133,15 @@ class WebQADataset(BaseClaimDataset):
             claim["_image_candidate_ids"] = valid_cand_ids
             if valid_cand_ids:
                 img_cand_claims += 1
+
+            # Per-claim image metadata (title + caption) for caption-BM25 retrieval.
+            # Filter to the same valid_cand_ids so metadata is aligned.
+            raw_meta = claim.get("image_candidate_metadata", [])
+            valid_set = set(valid_cand_ids)
+            claim["_image_candidate_metadata"] = [
+                m for m in raw_meta
+                if isinstance(m, dict) and str(m.get("id", "")) in valid_set
+            ]
         logger.info(
             "Image candidates indexed: %d/%d claims have per-claim image pools "
             "(dropped %d claims whose candidates were entirely missing from the TSV).",
@@ -178,6 +187,7 @@ class WebQADataset(BaseClaimDataset):
             "gold_text_ids": claim["_gold_text_ids"],
             "text_candidates": claim["_text_candidates"],
             "image_candidate_ids": claim.get("_image_candidate_ids", []),
+            "image_candidate_metadata": claim.get("_image_candidate_metadata", []),
             "label": _LABEL_MAP[claim["label"]],
             "misinfo_type": claim.get("manipulation_type", "true").lower(),
         }
