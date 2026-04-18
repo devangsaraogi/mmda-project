@@ -58,18 +58,30 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
 DATASET=/share/csc791003s26/cmvn/dataset-folder
-ADV_WITH_CANDS=$DATASET/step0_out/webqa_adv_with_candidates.jsonl
+# Write to a NEW filename so this job never races with concurrent runs
+# that consume the original webqa_adv_with_candidates.jsonl. The new
+# file carries image_candidate_metadata (title + caption per candidate)
+# in addition to the existing image_candidate_ids.
+ADV_WITH_META=$DATASET/step0_out/webqa_adv_with_metadata.jsonl
 
-# Require the enriched JSONL. IMPORTANT: the latest enrichment also
-# carries image_candidate_metadata (title + caption). If your copy
-# predates that, delete it so the enrichment regenerates.
-if [ ! -s "$ADV_WITH_CANDS" ]; then
-    echo "ERROR: $ADV_WITH_CANDS missing. Run lsf/retrieval_per_claim.bsub first."
-    exit 2
-fi
-if ! python -c "
+if [ ! -s "$ADV_WITH_META" ]; then
+    echo "Enriched-with-metadata JSONL not found. Building $ADV_WITH_META ..."
+    python scripts/enrich_webqa_adv_candidates.py \
+        --adv-in $DATASET/step0_out/webqa_adv.jsonl \
+        --webqa $DATASET/extracted_webqa_data/WebQA_train_val.json \
+        --out "$ADV_WITH_META"
+    ENRICH_EXIT=$?
+    if [ $ENRICH_EXIT -ne 0 ]; then
+        echo "ERROR: enrichment failed (exit $ENRICH_EXIT)"
+        exit $ENRICH_EXIT
+    fi
+else
+    # If the file exists, verify it has the metadata field; if not, rebuild
+    # (still safe because this is a separate filename, not the one used
+    # by the multimodal pipeline).
+    if ! python -c "
 import json, sys
-with open('$ADV_WITH_CANDS') as f:
+with open('$ADV_WITH_META') as f:
     for line in f:
         if line.strip():
             obj = json.loads(line)
@@ -77,11 +89,12 @@ with open('$ADV_WITH_CANDS') as f:
                 sys.exit(1)
             break
 " 2>/dev/null; then
-    echo "WARN: enriched JSONL lacks image_candidate_metadata — regenerating."
-    python scripts/enrich_webqa_adv_candidates.py \
-        --adv-in $DATASET/step0_out/webqa_adv.jsonl \
-        --webqa $DATASET/extracted_webqa_data/WebQA_train_val.json \
-        --out "$ADV_WITH_CANDS"
+        echo "WARN: $ADV_WITH_META lacks image_candidate_metadata — regenerating."
+        python scripts/enrich_webqa_adv_candidates.py \
+            --adv-in $DATASET/step0_out/webqa_adv.jsonl \
+            --webqa $DATASET/extracted_webqa_data/WebQA_train_val.json \
+            --out "$ADV_WITH_META"
+    fi
 fi
 
 EMBEDDINGS=$(ls -t results/runs/*/embeddings/image_index.pt 2>/dev/null | head -n 1)
@@ -95,7 +108,7 @@ python scripts/run_retrieval_hybrid.py \
     --config configs/default.yaml \
     --embeddings "$EMBEDDINGS" \
     --k-rrf 60 \
-    data.webqa_jsonl=$ADV_WITH_CANDS \
+    data.webqa_jsonl=$ADV_WITH_META \
     data.webqa_images_tsv=$DATASET/images/imgs.tsv \
     data.webqa_images_lineidx=$DATASET/images/imgs.lineidx \
     clip.device=cuda
