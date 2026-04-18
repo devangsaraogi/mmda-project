@@ -68,14 +68,36 @@ echo "========================================"
 
 DATASET=/share/csc791003s26/cmvn/dataset-folder
 
-# Artifacts from previous runs (Mar 1 2026):
-EMBEDDINGS=results/embeddings/image_index_NVIDIA_H200_NVL_20260301_170526.pt
-CHECKPOINT=results/runs/NVIDIA_H200_NVL_20260301_183957/checkpoints/mlp_best.pt
+# Resolve artifacts from the most recent runs (not a hardcoded path, which
+# silently breaks the moment directory layouts shift). The fallbacks exist
+# because prior code sometimes wrote image_index.pt under results/embeddings/
+# and sometimes under results/runs/<GPU>_<TS>/embeddings/.
+EMBEDDINGS=$(ls -t results/runs/*/embeddings/image_index.pt 2>/dev/null | head -n 1)
+if [ -z "$EMBEDDINGS" ]; then
+    EMBEDDINGS=$(ls -t results/embeddings/image_index*.pt 2>/dev/null | head -n 1)
+fi
+if [ -z "$EMBEDDINGS" ] || [ ! -s "$EMBEDDINGS" ]; then
+    echo "ERROR: no pre-computed CLIP embedding index found. E2E verification cannot proceed." >&2
+    echo "Searched: results/runs/*/embeddings/image_index.pt and results/embeddings/image_index*.pt" >&2
+    exit 2
+fi
+echo "Using CLIP index: $EMBEDDINGS"
+
+CHECKPOINT=$(ls -t results/runs/*/checkpoints/mlp_best.pt 2>/dev/null | head -n 1)
+if [ -z "$CHECKPOINT" ]; then
+    CHECKPOINT=results/checkpoints/mlp_best.pt
+fi
+if [ ! -s "$CHECKPOINT" ]; then
+    echo "ERROR: no trained MLP checkpoint found at $CHECKPOINT" >&2
+    echo "Searched: results/runs/*/checkpoints/mlp_best.pt and results/checkpoints/mlp_best.pt" >&2
+    exit 2
+fi
+echo "Using MLP checkpoint: $CHECKPOINT"
 
 python scripts/run_verification.py \
     --config configs/default.yaml \
-    ${EMBEDDINGS:+--embeddings "$EMBEDDINGS"} \
-    ${CHECKPOINT:+--checkpoint "$CHECKPOINT"} \
+    --embeddings "$EMBEDDINGS" \
+    --checkpoint "$CHECKPOINT" \
     data.webqa_jsonl=$DATASET/step0_out/webqa_adv.jsonl \
     data.webqa_images_tsv=$DATASET/images/imgs.tsv \
     data.webqa_images_lineidx=$DATASET/images/imgs.lineidx \
