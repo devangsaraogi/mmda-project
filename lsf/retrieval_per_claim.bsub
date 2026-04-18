@@ -56,6 +56,11 @@ export XDG_CACHE_HOME="$SCRATCH/.cache"
 mkdir -p "$MPLCONFIGDIR" "$HF_HOME" "$TORCH_HOME"
 export PYTHONUNBUFFERED=1
 
+# Compute nodes have no internet — CLIP + DeBERTa are already in $HF_HOME/hub
+# (verified 2026-04-18). Skip the 4-minute Hub ping timeout loop.
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
 DATASET=/share/csc791003s26/cmvn/dataset-folder
 ADV_IN=$DATASET/step0_out/webqa_adv.jsonl
 ADV_OUT=$DATASET/step0_out/webqa_adv_with_candidates.jsonl
