@@ -126,9 +126,11 @@ def run_threshold_verification(cfg, encoder, dataset, retriever=None, embedding_
 def run_mlp_verification(cfg, encoder, dataset, retriever=None, checkpoint_override=None, embedding_index=None):
     """Run MLP-based verification in both oracle and E2E modes."""
     test_data = dataset.get_split("test")
+    val_data = dataset.get_split("val")
 
-    # Oracle features
+    # Oracle features (test + val; val is needed for abstention calibration)
     oracle_feats = verify_oracle(encoder, test_data, embedding_index=embedding_index)
+    val_oracle_feats = verify_oracle(encoder, val_data, embedding_index=embedding_index)
 
     # Load trained MLP
     device = torch.device(cfg.clip.device if torch.cuda.is_available() or cfg.clip.device == "cpu" else "cpu")
@@ -144,16 +146,34 @@ def run_mlp_verification(cfg, encoder, dataset, retriever=None, checkpoint_overr
 
     # Predict (oracle)
     input_mode = cfg.verification.mlp.input_mode
-    if input_mode == "features":
-        X = torch.tensor(oracle_feats["features"], dtype=torch.float32).to(device)
-    else:
-        X = torch.tensor(oracle_feats["embeddings"], dtype=torch.float32).to(device)
+    feat_key = "features" if input_mode == "features" else "embeddings"
+    X = torch.tensor(oracle_feats[feat_key], dtype=torch.float32).to(device)
+    X_val = torch.tensor(val_oracle_feats[feat_key], dtype=torch.float32).to(device)
 
     with torch.no_grad():
-        oracle_preds = model(X).argmax(dim=1).cpu().numpy()
+        oracle_logits = model(X)
+        oracle_probs = torch.softmax(oracle_logits, dim=1).cpu().numpy()
+        oracle_preds = oracle_logits.argmax(dim=1).cpu().numpy()
+        val_oracle_logits = model(X_val)
+        val_oracle_probs = torch.softmax(val_oracle_logits, dim=1).cpu().numpy()
 
     oracle_metrics = compute_verification_metrics(oracle_feats["labels"], oracle_preds)
     oracle_breakdown = per_type_breakdown(oracle_feats["labels"], oracle_preds, oracle_feats["misinfo_types"])
+
+    # Save oracle probs for abstention ablation
+    save_metrics(
+        {
+            "val": {
+                "probs": val_oracle_probs.tolist(),
+                "labels": val_oracle_feats["labels"].tolist(),
+            },
+            "test": {
+                "probs": oracle_probs.tolist(),
+                "labels": oracle_feats["labels"].tolist(),
+            },
+        },
+        os.path.join(cfg.results.metrics_dir, "mlp_oracle_probs.json"),
+    )
 
     logger.info(f"MLP Oracle — Macro F1: {oracle_metrics['macro_f1']:.4f}")
 
@@ -180,17 +200,35 @@ def run_mlp_verification(cfg, encoder, dataset, retriever=None, checkpoint_overr
     if retriever:
         e2e_feats = verify_e2e(encoder, retriever, test_data, cfg.retrieval.default_top_k,
                               embedding_index=embedding_index)
+        val_e2e_feats = verify_e2e(encoder, retriever, val_data, cfg.retrieval.default_top_k,
+                                   embedding_index=embedding_index)
 
-        if input_mode == "features":
-            X_e2e = torch.tensor(e2e_feats["features"], dtype=torch.float32).to(device)
-        else:
-            X_e2e = torch.tensor(e2e_feats["embeddings"], dtype=torch.float32).to(device)
+        X_e2e = torch.tensor(e2e_feats[feat_key], dtype=torch.float32).to(device)
+        X_val_e2e = torch.tensor(val_e2e_feats[feat_key], dtype=torch.float32).to(device)
 
         with torch.no_grad():
-            e2e_preds = model(X_e2e).argmax(dim=1).cpu().numpy()
+            e2e_logits = model(X_e2e)
+            e2e_probs = torch.softmax(e2e_logits, dim=1).cpu().numpy()
+            e2e_preds = e2e_logits.argmax(dim=1).cpu().numpy()
+            val_e2e_probs = torch.softmax(model(X_val_e2e), dim=1).cpu().numpy()
 
         e2e_metrics = compute_verification_metrics(e2e_feats["labels"], e2e_preds)
         e2e_breakdown = per_type_breakdown(e2e_feats["labels"], e2e_preds, e2e_feats["misinfo_types"])
+
+        # Save E2E probs for abstention ablation
+        save_metrics(
+            {
+                "val": {
+                    "probs": val_e2e_probs.tolist(),
+                    "labels": val_e2e_feats["labels"].tolist(),
+                },
+                "test": {
+                    "probs": e2e_probs.tolist(),
+                    "labels": e2e_feats["labels"].tolist(),
+                },
+            },
+            os.path.join(cfg.results.metrics_dir, "mlp_e2e_probs.json"),
+        )
 
         logger.info(f"MLP E2E — Macro F1: {e2e_metrics['macro_f1']:.4f}")
 
