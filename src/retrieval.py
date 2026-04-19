@@ -357,6 +357,8 @@ def evaluate_retrieval_scoped(
 
     logger.info("Batch encoding %d claim texts (scoped retrieval)...", n)
     claim_texts: list[str] = []
+    claim_ids: list[str] = []
+    misinfo_types: list[str] = []
     pools: list[list[str]] = []
     gold_sets: list[set[str]] = []
     has_gold_mask: list[bool] = []
@@ -367,6 +369,8 @@ def evaluate_retrieval_scoped(
     for i in range(n):
         item = dataset[i]
         claim_texts.append(item["claim_text"])
+        claim_ids.append(item.get("claim_id", str(i)))
+        misinfo_types.append(item.get("misinfo_type", "unknown"))
         pool = [str(c) for c in item.get("image_candidate_ids", []) if c is not None]
         pools.append(pool)
         pool_sizes.append(len(pool))
@@ -429,4 +433,11 @@ def evaluate_retrieval_scoped(
         "n_total": n,
         "n_has_gold": n_has_gold,
         "n_gold_in_pool": n_gold_in_pool,
+        # Per-claim hit indicators (for bootstrap CIs and per-type breakdowns).
+        # All lists below are length n_total, aligned with dataset index order.
+        "per_claim_hits": {str(k): [int(v) for v in recall_scores[k]] for k in top_k_values},
+        "has_gold_mask": [int(v) for v in has_gold_mask],
+        "gold_in_pool_mask": [int(v) for v in gold_in_pool_mask],
+        "claim_ids": claim_ids,
+        "misinfo_types": misinfo_types,
     }

@@ -138,6 +138,12 @@ def main():
                 "n_total": n,
                 "n_has_gold": int(sum(has_gold_mask)),
                 "n_gold_in_pool": int(sum(gold_in_pool_mask)),
+                # Per-claim hit indicators for bootstrap CIs + per-type breakdown.
+                "per_claim_hits": {str(k): [int(v) for v in global_recall_all[k]] for k in cfg.retrieval.top_k_values},
+                "has_gold_mask": [int(v) for v in has_gold_mask],
+                "gold_in_pool_mask": [int(v) for v in gold_in_pool_mask],
+                "claim_ids": [test_data[i]["claim_id"] for i in range(n)],
+                "misinfo_types": [test_data[i]["misinfo_type"] for i in range(n)],
             }
 
         save_metrics(

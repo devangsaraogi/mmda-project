@@ -1,0 +1,86 @@
+#!/bin/bash
+#BSUB -J clip-siglip
+#BSUB -o logs/retrieval_siglip_%J.out
+#BSUB -e logs/retrieval_siglip_%J.err
+#BSUB -W 1:30
+#BSUB -q short_gpu
+#BSUB -gpu "num=1"
+#BSUB -n 8
+#BSUB -M 16GB
+
+echo "========================================"
+echo "MMDA — SigLIP 2 Per-Claim Retrieval (encoder ablation)"
+echo "========================================"
+echo "Job ID: $LSB_JOBID"
+echo "Host: $HOSTNAME"
+echo "Start time: $(date)"
+
+# Load modules
+module load python/3.11 2>/dev/null || module load python/3.9.6 2>/dev/null || module load python 2>/dev/null
+module load cuda/12.1 2>/dev/null || module load cuda/11.8 2>/dev/null || module load cuda 2>/dev/null
+
+# Locate project root (robust to submit CWD)
+if [ -f "$LS_SUBCWD/setup.py" ]; then
+    PROJECT_ROOT="$LS_SUBCWD"
+elif [ -f "$LS_SUBCWD/../setup.py" ]; then
+    PROJECT_ROOT="$(cd "$LS_SUBCWD/.." && pwd)"
+else
+    echo "ERROR: could not locate project root (setup.py) from LS_SUBCWD=$LS_SUBCWD" >&2
+    exit 2
+fi
+cd "$PROJECT_ROOT"
+mkdir -p logs
+source venv/bin/activate
+echo "Python: $(python --version)"
+echo "Working directory: $(pwd)"
+
+# GPU / cache setup
+python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"None\"}')"
+nvidia-smi
+
+GROUP=$(groups | cut -d' ' -f1)
+SCRATCH="/share/$GROUP/$USER"
+export MPLCONFIGDIR="$SCRATCH/tmp/matplotlib"
+export HF_HOME="$SCRATCH/.cache/huggingface"
+export TORCH_HOME="$SCRATCH/.cache/torch"
+export XDG_CACHE_HOME="$SCRATCH/.cache"
+mkdir -p "$MPLCONFIGDIR" "$HF_HOME" "$TORCH_HOME"
+export PYTHONUNBUFFERED=1
+
+# IMPORTANT: SigLIP 2 needs to be downloaded to the HF cache ONCE from a
+# login node (compute nodes have no internet). Run ON THE LOGIN NODE:
+#   python -c "from transformers import AutoModel, AutoProcessor; \
+#     m='google/siglip2-base-patch16-256'; \
+#     AutoProcessor.from_pretrained(m); AutoModel.from_pretrained(m)"
+# After that, compute nodes can load it offline.
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+DATASET=/share/csc791003s26/cmvn/dataset-folder
+ADV_WITH_CANDS=$DATASET/step0_out/webqa_adv_with_candidates.jsonl
+
+if [ ! -s "$ADV_WITH_CANDS" ]; then
+    echo "ERROR: $ADV_WITH_CANDS missing. Run lsf/retrieval_per_claim.bsub first."
+    exit 2
+fi
+
+echo "========================================"
+echo "Starting SigLIP per-claim retrieval..."
+echo "========================================"
+
+python scripts/run_retrieval_siglip_per_claim.py \
+    --config configs/default.yaml \
+    --model google/siglip2-base-patch16-256 \
+    --batch-size 64 \
+    data.webqa_jsonl=$ADV_WITH_CANDS \
+    data.webqa_images_tsv=$DATASET/images/imgs.tsv \
+    data.webqa_images_lineidx=$DATASET/images/imgs.lineidx \
+    clip.device=cuda
+
+EXIT_CODE=$?
+
+echo -e "\n========================================"
+echo "Job complete!  Exit code: $EXIT_CODE"
+echo "End time: $(date)"
+echo "========================================"
+exit $EXIT_CODE
