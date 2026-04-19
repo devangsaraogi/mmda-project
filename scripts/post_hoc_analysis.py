@@ -352,12 +352,21 @@ def write_summary(
         lines.append("")
         lines.append("| Metric | Mean | 95% CI |")
         lines.append("|---|---|---|")
+
+        def _is_ci_dict(d) -> bool:
+            return isinstance(d, dict) and "mean" in d and "ci95_lo" in d and "ci95_hi" in d
+
         for k, v in cis.items():
-            if isinstance(v, dict) and "mean" in v:
+            if _is_ci_dict(v):
                 lines.append(f"| {k} | {v['mean']:.4f} | [{v['ci95_lo']:.4f}, {v['ci95_hi']:.4f}] |")
             elif isinstance(v, dict):
+                # Nested dict of CI-dicts (e.g. retrieval_per_claim: {"R@1": {...}, ...})
                 for inner_k, inner_v in v.items():
-                    lines.append(f"| {k}.{inner_k} | {inner_v['mean']:.4f} | [{inner_v['ci95_lo']:.4f}, {inner_v['ci95_hi']:.4f}] |")
+                    if _is_ci_dict(inner_v):
+                        lines.append(f"| {k}.{inner_k} | {inner_v['mean']:.4f} | [{inner_v['ci95_lo']:.4f}, {inner_v['ci95_hi']:.4f}] |")
+                    else:
+                        # E.g. abstention_thresholds entries — plain scalars.
+                        lines.append(f"| {k}.{inner_k} | {inner_v} | — |")
         lines.append("")
     if curve and "points" in curve:
         lines.append("## Abstention coverage-F1 curve (excerpt)")
