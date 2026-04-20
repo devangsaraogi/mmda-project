@@ -22,8 +22,13 @@ MODELS = [
     ("BAAI/bge-small-en-v1.5", "AutoModel"),
     # Cross-encoder reranker
     ("cross-encoder/ms-marco-MiniLM-L-12-v2", "AutoModelForSequenceClassification"),
-    # NLI large (for scale ablation)
-    ("MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli", "AutoModelForSequenceClassification"),
+    # NLI-large for the scale ablation. Same author / same backbone as the
+    # midterm base model, with a superset of the NLI training data
+    # (adds LingNLI + WANLI to MNLI+FEVER+ANLI).
+    (
+        "MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli",
+        "AutoModelForSequenceClassification",
+    ),
 ]
 
 
@@ -37,12 +42,25 @@ def main() -> int:
         "AutoModel": AutoModel,
         "AutoModelForSequenceClassification": AutoModelForSequenceClassification,
     }
+    failed: list[tuple[str, str]] = []
     for name, cls_name in MODELS:
         print(f"\n=== {name} ({cls_name}) ===")
-        AutoTokenizer.from_pretrained(name)
-        print("  tokenizer: ok")
-        model_cls_map[cls_name].from_pretrained(name)
-        print("  model: ok")
+        try:
+            AutoTokenizer.from_pretrained(name)
+            print("  tokenizer: ok")
+            model_cls_map[cls_name].from_pretrained(name)
+            print("  model: ok")
+        except Exception as e:
+            print(f"  FAILED: {type(e).__name__}: {e}")
+            failed.append((name, str(e)))
+
+    if failed:
+        print("\nSome models failed to download:")
+        for name, err in failed:
+            print(f"  - {name}: {err[:200]}")
+        print("\nThe other models are cached. Investigate failed ones before "
+              "submitting jobs that depend on them.")
+        return 1
 
     print("\nAll models cached. Safe to submit with HF_HUB_OFFLINE=1.")
     return 0

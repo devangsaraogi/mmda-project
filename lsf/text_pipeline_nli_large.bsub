@@ -37,12 +37,10 @@ export TRANSFORMERS_OFFLINE=1
 
 DATASET=/share/csc791003s26/cmvn/dataset-folder
 
-# NLI model override → DeBERTa-v3-large MNLI+FEVER+ANLI (435M params, ~3x base).
-# Pre-download on a login node first:
-#   HF_HOME=$SCRATCH/.cache/huggingface python -c \
-#     "from transformers import AutoModelForSequenceClassification, AutoTokenizer; \
-#      n='MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli'; \
-#      AutoTokenizer.from_pretrained(n); AutoModelForSequenceClassification.from_pretrained(n)"
+# NLI model override → DeBERTa-v3-large mnli+fever+anli+ling+wanli (435M params,
+# ~3x base). Same author / backbone / label order as the midterm base model;
+# trained on a superset of NLI data. Pre-download on a login node first via
+# `python scripts/prefetch_text_models.py`.
 python scripts/run_text_pipeline.py \
     --config configs/default.yaml \
     --retriever bm25 \
@@ -50,7 +48,7 @@ python scripts/run_text_pipeline.py \
     data.webqa_images_tsv=$DATASET/images/imgs.tsv \
     data.webqa_images_lineidx=$DATASET/images/imgs.lineidx \
     clip.device=cuda \
-    text.nli.model_name=MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli \
+    text.nli.model_name=MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli \
     text.nli.batch_size=16
 
 EXIT_CODE=$?
