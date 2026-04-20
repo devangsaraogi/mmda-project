@@ -1,7 +1,7 @@
 #!/bin/bash
 #BSUB -J text-pipe-hybrid
-#BSUB -o ../logs/text_pipeline_hybrid_%J.out
-#BSUB -e ../logs/text_pipeline_hybrid_%J.err
+#BSUB -o logs/text_pipeline_hybrid_%J.out
+#BSUB -e logs/text_pipeline_hybrid_%J.err
 #BSUB -W 4:00
 #BSUB -q gpu
 #BSUB -gpu "num=1"
@@ -19,7 +19,17 @@ echo "Start: $(date)"
 module load python/3.11 2>/dev/null || module load python/3.9.6 2>/dev/null || module load python 2>/dev/null
 module load cuda/12.1 2>/dev/null || module load cuda/11.8 2>/dev/null || module load cuda 2>/dev/null
 
-cd $LS_SUBCWD/..
+# Be robust to submitting from either mmda-project/ or mmda-project/lsf/
+if [ -f "$LS_SUBCWD/setup.py" ]; then
+    PROJECT_ROOT="$LS_SUBCWD"
+elif [ -f "$LS_SUBCWD/../setup.py" ]; then
+    PROJECT_ROOT="$(cd "$LS_SUBCWD/.." && pwd)"
+else
+    echo "ERROR: could not locate project root (setup.py) from LS_SUBCWD=$LS_SUBCWD" >&2
+    exit 2
+fi
+cd "$PROJECT_ROOT"
+mkdir -p logs
 source venv/bin/activate
 echo "Python: $(python --version)"
 
