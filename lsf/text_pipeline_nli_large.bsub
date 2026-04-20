@@ -1,0 +1,66 @@
+#!/bin/bash
+#BSUB -J text-pipe-large
+#BSUB -o logs/text_pipeline_nli_large_%J.out
+#BSUB -e logs/text_pipeline_nli_large_%J.err
+#BSUB -W 6:00
+#BSUB -q gpu
+#BSUB -gpu "num=1"
+#BSUB -n 8
+#BSUB -M 48GB
+
+echo "========================================"
+echo "MMDA — Text Pipeline: BM25 + DeBERTa-v3-large NLI"
+echo "========================================"
+echo "Job ID: $LSB_JOBID"
+echo "Host: $HOSTNAME"
+echo "Start: $(date)"
+
+module load python/3.11 2>/dev/null || module load python/3.9.6 2>/dev/null || module load python 2>/dev/null
+module load cuda/12.1 2>/dev/null || module load cuda/11.8 2>/dev/null || module load cuda 2>/dev/null
+
+# Be robust to submitting from either mmda-project/ or mmda-project/lsf/
+if [ -f "$LS_SUBCWD/setup.py" ]; then
+    PROJECT_ROOT="$LS_SUBCWD"
+elif [ -f "$LS_SUBCWD/../setup.py" ]; then
+    PROJECT_ROOT="$(cd "$LS_SUBCWD/.." && pwd)"
+else
+    echo "ERROR: could not locate project root (setup.py) from LS_SUBCWD=$LS_SUBCWD" >&2
+    exit 2
+fi
+cd "$PROJECT_ROOT"
+mkdir -p logs
+source venv/bin/activate
+echo "Python: $(python --version)"
+
+python -c "import torch; print(f'CUDA={torch.cuda.is_available()}')"
+
+GROUP=$(groups | cut -d' ' -f1)
+SCRATCH="/share/$GROUP/$USER"
+export MPLCONFIGDIR="$SCRATCH/tmp/matplotlib"
+export HF_HOME="$SCRATCH/.cache/huggingface"
+export TORCH_HOME="$SCRATCH/.cache/torch"
+export XDG_CACHE_HOME="$SCRATCH/.cache"
+mkdir -p "$MPLCONFIGDIR" "$HF_HOME" "$TORCH_HOME"
+export PYTHONUNBUFFERED=1
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+DATASET=/share/csc791003s26/cmvn/dataset-folder
+
+# NLI model override → DeBERTa-v3-large mnli+fever+anli+ling+wanli (435M params,
+# ~3x base). Same author / backbone / label order as the midterm base model;
+# trained on a superset of NLI data. Pre-download on a login node first via
+# `python scripts/prefetch_text_models.py`.
+python scripts/run_text_pipeline.py \
+    --config configs/default.yaml \
+    --retriever bm25 \
+    data.webqa_jsonl=$DATASET/step0_out/webqa_adv.jsonl \
+    data.webqa_images_tsv=$DATASET/images/imgs.tsv \
+    data.webqa_images_lineidx=$DATASET/images/imgs.lineidx \
+    clip.device=cuda \
+    text.nli.model_name=MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli \
+    text.nli.batch_size=16
+
+EXIT_CODE=$?
+echo "Exit: $EXIT_CODE — $(date)"
+exit $EXIT_CODE

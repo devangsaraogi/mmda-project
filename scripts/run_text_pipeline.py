@@ -1,6 +1,17 @@
-"""Text-only pipeline: BM25 retrieval + NLI verification."""
+"""Text-only pipeline: retrieval + NLI verification.
+
+By default uses BM25 retrieval (midterm-frozen behavior). Pass
+``--retriever dense|hybrid|hybrid_rerank`` to swap the retrieval stage
+for the ablation experiments in ``final/text-dense-rerank-nli``.
+
+The NLI side is unchanged — model choice remains driven by
+``text.nli.model_name`` in the config, which the caller can override
+on the command line (e.g. to point at DeBERTa-large).
+"""
+from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import logging
@@ -122,13 +133,83 @@ def evaluate_with_threshold(features, labels):
     return preds
 
 
+def _build_retriever(kind: str, dense_model: str, rerank_model: str,
+                     pool_size: int, k_rrf: int):
+    """Factory for the retrieval stage. BM25 is always returned alongside
+    for Recall@K reporting; the second element is the retriever actually
+    used to build the E2E evidence map."""
+    bm25 = BM25Retriever()
+    if kind == "bm25":
+        return bm25, bm25, None
+    if kind == "dense":
+        from src.retrieval_text_dense import DenseTextRetriever
+        dense = DenseTextRetriever(model_name=dense_model)
+        return bm25, dense, None
+    if kind == "hybrid":
+        from src.retrieval_text_dense import DenseTextRetriever
+        from src.retrieval_text_hybrid import RRFTextHybridRetriever
+        dense = DenseTextRetriever(model_name=dense_model)
+        hybrid = RRFTextHybridRetriever(bm25, dense, k_rrf=k_rrf, pool_size=pool_size)
+        return bm25, hybrid, None
+    if kind == "hybrid_rerank":
+        from src.retrieval_text_dense import DenseTextRetriever
+        from src.retrieval_text_hybrid import RRFTextHybridRetriever
+        from src.reranker import CrossEncoderReranker
+        dense = DenseTextRetriever(model_name=dense_model)
+        hybrid = RRFTextHybridRetriever(bm25, dense, k_rrf=k_rrf, pool_size=pool_size)
+        reranker = CrossEncoderReranker(model_name=rerank_model)
+        return bm25, hybrid, reranker
+    raise ValueError(f"Unknown --retriever: {kind}")
+
+
+def _build_evidence_map(
+    retriever_kind: str,
+    primary_retriever,
+    reranker,
+    dataset,
+    split: str,
+    top_k: int,
+    pool_size: int,
+):
+    """Build the claim_id -> [(cid, score), ...] evidence map used by NLI."""
+    if retriever_kind == "bm25":
+        return build_text_evidence_map_bm25(primary_retriever, dataset, split=split, top_k=top_k)
+    # dense / hybrid / hybrid_rerank all share the same retrieve_all API
+    if retriever_kind == "hybrid_rerank":
+        base_ranked = primary_retriever.retrieve_all(dataset, split=split, top_k=pool_size)
+        return reranker.rerank_all(dataset, base_ranked, split=split, top_k=top_k)
+    return primary_retriever.retrieve_all(dataset, split=split, top_k=top_k)
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Text-only pipeline (BM25 + NLI)")
+    parser = argparse.ArgumentParser(description="Text pipeline: retrieval + NLI")
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument("--nli-scores", type=str, default=None,
                         help="Path to pre-computed NLI scores (.pt file)")
     parser.add_argument("--debug", action="store_true",
                         help="Run on small subset (100 claims)")
+    parser.add_argument(
+        "--retriever", type=str, default="bm25",
+        choices=["bm25", "dense", "hybrid", "hybrid_rerank"],
+        help="Retrieval strategy for the E2E evidence map.",
+    )
+    parser.add_argument(
+        "--dense-model", type=str, default="BAAI/bge-small-en-v1.5",
+        help="HF model for dense retriever (used when --retriever != bm25).",
+    )
+    parser.add_argument(
+        "--rerank-model", type=str,
+        default="cross-encoder/ms-marco-MiniLM-L-12-v2",
+        help="HF model for cross-encoder reranker (used when --retriever=hybrid_rerank).",
+    )
+    parser.add_argument(
+        "--pool-size", type=int, default=20,
+        help="Per-retriever candidate pool before fusion/rerank.",
+    )
+    parser.add_argument(
+        "--k-rrf", type=int, default=60,
+        help="Reciprocal Rank Fusion smoothing constant.",
+    )
     parser.add_argument("overrides", nargs="*")
     args = parser.parse_args()
 
@@ -159,9 +240,9 @@ def main():
             image_pool_size=len(dataset.get_all_image_ids()),
         )
 
-        # === Step 2: BM25 Retrieval ===
+        # === Step 2: Retrieval ===
         print("\n" + "=" * 60)
-        print("STEP 2: BM25 Text Retrieval")
+        print(f"STEP 2: Text Retrieval (strategy = {args.retriever})")
         print("=" * 60)
 
         text_cfg = cfg.get("text", {})
@@ -169,17 +250,54 @@ def main():
         top_k_values = list(bm25_cfg.get("top_k_values", [1, 3, 5, 10]))
         default_top_k = int(bm25_cfg.get("default_top_k", 5))
 
-        bm25 = BM25Retriever()
-        recall_results = bm25.evaluate_recall(dataset, split="test", top_k_values=top_k_values)
+        bm25, primary_retriever, reranker = _build_retriever(
+            args.retriever,
+            dense_model=args.dense_model,
+            rerank_model=args.rerank_model,
+            pool_size=args.pool_size,
+            k_rrf=args.k_rrf,
+        )
 
+        # BM25 recall on test is always reported as baseline.
+        recall_results = bm25.evaluate_recall(dataset, split="test", top_k_values=top_k_values)
         for k, r in sorted(recall_results.items()):
             print(f"  BM25 Recall@{k}: {r:.4f}")
 
+        retrieval_metrics = {"bm25_recall_at_k": recall_results}
+
+        # If not BM25, also report the chosen retriever's recall.
+        if args.retriever != "bm25":
+            print(f"\n  --- {args.retriever} recall ---")
+            primary_recall = primary_retriever.evaluate_recall(
+                dataset, split="test", top_k_values=top_k_values,
+            )
+            for k, r in sorted(primary_recall.items()):
+                print(f"  {args.retriever} Recall@{k}: {r:.4f}")
+            retrieval_metrics[f"{args.retriever}_recall_at_k"] = primary_recall
+
+            if reranker is not None:
+                print("\n  --- hybrid_rerank recall (after CE rerank) ---")
+                pool_ranked = primary_retriever.retrieve_all(
+                    dataset, split="test", top_k=args.pool_size,
+                )
+                reranked = reranker.rerank_all(
+                    dataset, pool_ranked, split="test", top_k=max(top_k_values),
+                )
+                rerank_recall = reranker.evaluate_recall(
+                    dataset, reranked, split="test", top_k_values=top_k_values,
+                )
+                for k, r in sorted(rerank_recall.items()):
+                    print(f"  rerank Recall@{k}: {r:.4f}")
+                retrieval_metrics["rerank_recall_at_k"] = rerank_recall
+
         save_metrics(
-            {"bm25_recall_at_k": recall_results},
-            os.path.join(cfg.results.metrics_dir, "text_retrieval_metrics.json"),
+            retrieval_metrics,
+            os.path.join(cfg.results.metrics_dir, f"text_retrieval_metrics_{args.retriever}.json"),
         )
-        tracker.log_step("bm25_retrieval", **{f"recall@{k}": v for k, v in recall_results.items()})
+        tracker.log_step(
+            f"retrieval_{args.retriever}",
+            **{f"bm25_recall@{k}": v for k, v in recall_results.items()},
+        )
 
         # === Step 3: NLI Verification ===
         print("\n" + "=" * 60)
@@ -209,12 +327,13 @@ def main():
                 test_oracle = oracle_results
 
         # --- E2E mode (test only — train/val reuse oracle features) ---
-        print("\n--- E2E mode (BM25 retrieved text evidence, test split only) ---")
-        bm25_evidence = build_text_evidence_map_bm25(
-            bm25, dataset, split="test", top_k=default_top_k,
+        print(f"\n--- E2E mode ({args.retriever} retrieved text evidence, test split only) ---")
+        e2e_evidence = _build_evidence_map(
+            args.retriever, primary_retriever, reranker,
+            dataset, split="test", top_k=default_top_k, pool_size=args.pool_size,
         )
         test_e2e = nli.extract_features_batch(
-            dataset, bm25_evidence, split="test", top_k=default_top_k,
+            dataset, e2e_evidence, split="test", top_k=default_top_k,
         )
         # Reuse oracle features for train/val (MLP trains on oracle, evaluates on E2E)
         train_e2e = train_oracle
@@ -270,34 +389,36 @@ def main():
             all_text_metrics[f"text_{mode_name}_mlp"] = mlp_metrics
             all_text_metrics[f"text_{mode_name}_mlp_per_type"] = mlp_type_breakdown
 
+            # Retriever-tagged output paths so parallel ablations don't clobber each other.
+            tag = args.retriever
             save_metrics(
                 mlp_metrics,
-                os.path.join(cfg.results.metrics_dir, f"text_{mode_name}_mlp_metrics.json"),
+                os.path.join(cfg.results.metrics_dir, f"text_{tag}_{mode_name}_mlp_metrics.json"),
             )
             save_metrics(
                 thresh_metrics,
-                os.path.join(cfg.results.metrics_dir, f"text_{mode_name}_threshold_metrics.json"),
+                os.path.join(cfg.results.metrics_dir, f"text_{tag}_{mode_name}_threshold_metrics.json"),
             )
 
             # Visualization
             plot_confusion_matrix(
                 mlp_metrics["confusion_matrix"],
                 mlp_metrics["confusion_labels"],
-                os.path.join(cfg.results.figures_dir, f"text_{mode_name}_mlp_cm.png"),
-                title=f"Text {mode_name.upper()} MLP",
+                os.path.join(cfg.results.figures_dir, f"text_{tag}_{mode_name}_mlp_cm.png"),
+                title=f"Text {tag.upper()} {mode_name.upper()} MLP",
             )
             plot_per_type_breakdown(
                 mlp_type_breakdown,
-                os.path.join(cfg.results.figures_dir, f"text_{mode_name}_per_type.png"),
+                os.path.join(cfg.results.figures_dir, f"text_{tag}_{mode_name}_per_type.png"),
             )
 
             # Save checkpoint
-            ckpt_path = os.path.join(cfg.results.checkpoints_dir, f"text_mlp_{mode_name}.pt")
+            ckpt_path = os.path.join(cfg.results.checkpoints_dir, f"text_mlp_{tag}_{mode_name}.pt")
             os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
             torch.save(model.state_dict(), ckpt_path)
 
             # Save features for fusion
-            feat_path = os.path.join(run_dir, f"text_features_{mode_name}.pt")
+            feat_path = os.path.join(run_dir, f"text_features_{tag}_{mode_name}.pt")
             torch.save({
                 "train": {"features": train_data["features"], "labels": train_data["labels"],
                           "claim_ids": train_data["claim_ids"], "misinfo_types": train_data["misinfo_types"]},
@@ -324,6 +445,8 @@ def main():
 
         # Final tracker
         tracker.log_results(
+            retriever=args.retriever,
+            nli_model=nli_model_name,
             bm25_recall_at_5=recall_results.get(5, 0),
             text_oracle_mlp_f1=all_text_metrics["text_oracle_mlp"]["macro_f1"],
             text_e2e_mlp_f1=all_text_metrics["text_e2e_mlp"]["macro_f1"],
