@@ -1,0 +1,54 @@
+#!/bin/bash
+#BSUB -J text-pipe-hybrid
+#BSUB -o ../logs/text_pipeline_hybrid_%J.out
+#BSUB -e ../logs/text_pipeline_hybrid_%J.err
+#BSUB -W 4:00
+#BSUB -q gpu
+#BSUB -gpu "num=1"
+#BSUB -n 8
+#BSUB -M 32GB
+
+echo "========================================"
+echo "MMDA — Text Pipeline: HYBRID retrieval"
+echo "  BM25 + BGE-small (RRF) + DeBERTa-base NLI"
+echo "========================================"
+echo "Job ID: $LSB_JOBID"
+echo "Host: $HOSTNAME"
+echo "Start: $(date)"
+
+module load python/3.11 2>/dev/null || module load python/3.9.6 2>/dev/null || module load python 2>/dev/null
+module load cuda/12.1 2>/dev/null || module load cuda/11.8 2>/dev/null || module load cuda 2>/dev/null
+
+cd $LS_SUBCWD/..
+source venv/bin/activate
+echo "Python: $(python --version)"
+
+python -c "import torch; print(f'CUDA={torch.cuda.is_available()}')"
+
+GROUP=$(groups | cut -d' ' -f1)
+SCRATCH="/share/$GROUP/$USER"
+export MPLCONFIGDIR="$SCRATCH/tmp/matplotlib"
+export HF_HOME="$SCRATCH/.cache/huggingface"
+export TORCH_HOME="$SCRATCH/.cache/torch"
+export XDG_CACHE_HOME="$SCRATCH/.cache"
+mkdir -p "$MPLCONFIGDIR" "$HF_HOME" "$TORCH_HOME"
+export PYTHONUNBUFFERED=1
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+DATASET=/share/csc791003s26/cmvn/dataset-folder
+
+python scripts/run_text_pipeline.py \
+    --config configs/default.yaml \
+    --retriever hybrid \
+    --dense-model BAAI/bge-small-en-v1.5 \
+    --pool-size 20 \
+    --k-rrf 60 \
+    data.webqa_jsonl=$DATASET/step0_out/webqa_adv.jsonl \
+    data.webqa_images_tsv=$DATASET/images/imgs.tsv \
+    data.webqa_images_lineidx=$DATASET/images/imgs.lineidx \
+    clip.device=cuda
+
+EXIT_CODE=$?
+echo "Exit: $EXIT_CODE — $(date)"
+exit $EXIT_CODE
