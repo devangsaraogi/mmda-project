@@ -245,13 +245,16 @@ def _train_fusion(model, train_data, val_data, cfg, device,
 
 def _eval_fusion(model, data, device,
                  feat_a_key="visual_features", feat_b_key="text_features"):
+    """Return predictions AND softmax probabilities (for post-hoc abstention + CIs)."""
     Xa = torch.tensor(data[feat_a_key], dtype=torch.float32).to(device)
     Xb = torch.tensor(data[feat_b_key], dtype=torch.float32).to(device)
     y = data["labels"]
     model.eval()
     with torch.no_grad():
-        preds = model(Xa, Xb).argmax(1).cpu().numpy()
-    return preds, y
+        logits = model(Xa, Xb)
+        probs = torch.softmax(logits, dim=1).cpu().numpy()
+        preds = logits.argmax(1).cpu().numpy()
+    return preds, y, probs
 
 
 def main():
@@ -297,25 +300,42 @@ def main():
     variants = [v.strip() for v in args.variants.split(",") if v.strip()]
     summary: dict = {"tag": args.tag, "variants": {}}
 
-    # Prepare unimodal probs once if 'confidence' is requested.
-    p_vis_va = p_vis_te = p_txt_va = p_txt_te = None
-    if "confidence" in variants:
-        logger.info("Training quick unimodal MLPs for ConfidenceWeightedFusion inputs.")
-        Xv_tr = torch.tensor(aligned["train"]["visual_features"], dtype=torch.float32)
-        Xv_va = torch.tensor(aligned["val"]["visual_features"],   dtype=torch.float32)
-        Xv_te = torch.tensor(aligned["test"]["visual_features"],  dtype=torch.float32)
-        Xt_tr = torch.tensor(aligned["train"]["text_features"],   dtype=torch.float32)
-        Xt_va = torch.tensor(aligned["val"]["text_features"],     dtype=torch.float32)
-        Xt_te = torch.tensor(aligned["test"]["text_features"],    dtype=torch.float32)
-        y_tr = torch.tensor(aligned["train"]["labels"], dtype=torch.long)
-        y_va = torch.tensor(aligned["val"]["labels"],   dtype=torch.long)
+    # Train unimodal MLPs ALWAYS — we need their val+test probs both for
+    # the confidence variant and for post-hoc cross-modality decomposition.
+    logger.info("Training quick unimodal MLPs (needed for confidence fusion + post-hoc).")
+    Xv_tr = torch.tensor(aligned["train"]["visual_features"], dtype=torch.float32)
+    Xv_va = torch.tensor(aligned["val"]["visual_features"],   dtype=torch.float32)
+    Xv_te = torch.tensor(aligned["test"]["visual_features"],  dtype=torch.float32)
+    Xt_tr = torch.tensor(aligned["train"]["text_features"],   dtype=torch.float32)
+    Xt_va = torch.tensor(aligned["val"]["text_features"],     dtype=torch.float32)
+    Xt_te = torch.tensor(aligned["test"]["text_features"],    dtype=torch.float32)
+    y_tr = torch.tensor(aligned["train"]["labels"], dtype=torch.long)
+    y_va = torch.tensor(aligned["val"]["labels"],   dtype=torch.long)
 
-        vis_mlp = _train_quick_mlp(Xv_tr, y_tr, Xv_va, y_va, vdim, device)
-        txt_mlp = _train_quick_mlp(Xt_tr, y_tr, Xt_va, y_va, tdim, device)
-        p_vis_va = _probs(vis_mlp, Xv_va, device)
-        p_vis_te = _probs(vis_mlp, Xv_te, device)
-        p_txt_va = _probs(txt_mlp, Xt_va, device)
-        p_txt_te = _probs(txt_mlp, Xt_te, device)
+    vis_mlp = _train_quick_mlp(Xv_tr, y_tr, Xv_va, y_va, vdim, device)
+    txt_mlp = _train_quick_mlp(Xt_tr, y_tr, Xt_va, y_va, tdim, device)
+    p_vis_va = _probs(vis_mlp, Xv_va, device)
+    p_vis_te = _probs(vis_mlp, Xv_te, device)
+    p_txt_va = _probs(txt_mlp, Xt_va, device)
+    p_txt_te = _probs(txt_mlp, Xt_te, device)
+
+    # Stash per-variant predictions + probs for the post-hoc analysis script.
+    predictions_payload: dict = {
+        "tag": args.tag,
+        "labels_val":  aligned["val"]["labels"].tolist(),
+        "labels_test": aligned["test"]["labels"].tolist(),
+        "claim_ids_val":  list(aligned["val"]["claim_ids"]),
+        "claim_ids_test": list(aligned["test"]["claim_ids"]),
+        "misinfo_types_val":  list(aligned["val"]["misinfo_types"]),
+        "misinfo_types_test": list(aligned["test"]["misinfo_types"]),
+        "unimodal": {
+            "visual_probs_val":  p_vis_va.numpy().tolist(),
+            "visual_probs_test": p_vis_te.numpy().tolist(),
+            "text_probs_val":    p_txt_va.numpy().tolist(),
+            "text_probs_test":   p_txt_te.numpy().tolist(),
+        },
+        "variants": {},
+    }
 
     for variant in variants:
         logger.info("==== Variant: %s ====", variant)
@@ -357,12 +377,14 @@ def main():
                 model, aligned_probs["train"], aligned_probs["val"], cfg, device,
                 epochs=40, patience_max=8,
             )
-            preds, y = _eval_fusion(model, aligned_probs["test"], device)
+            preds, y, probs_test = _eval_fusion(model, aligned_probs["test"], device)
+            _, _, probs_val = _eval_fusion(model, aligned_probs["val"], device)
         else:
             model, best_val = _train_fusion(
                 model, aligned["train"], aligned["val"], cfg, device,
             )
-            preds, y = _eval_fusion(model, aligned["test"], device)
+            preds, y, probs_test = _eval_fusion(model, aligned["test"], device)
+            _, _, probs_val = _eval_fusion(model, aligned["val"], device)
 
         metrics = compute_verification_metrics(y, preds)
         type_bd = per_type_breakdown(y, preds, aligned["test"]["misinfo_types"])
@@ -381,12 +403,26 @@ def main():
             "macro_f1": metrics["macro_f1"],
             "val_f1": best_val,
         }
+        predictions_payload["variants"][variant] = {
+            "preds_test": preds.tolist(),
+            "probs_test": probs_test.tolist(),
+            "probs_val":  probs_val.tolist(),
+            "val_f1":     float(best_val),
+        }
 
     summary_path = os.path.join(cfg.results.metrics_dir,
                                 f"fusion_v2_summary_{args.tag}.json")
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
     logger.info("Summary -> %s", summary_path)
+
+    # Predictions payload for the post-hoc analysis script (bootstrap CIs,
+    # per-type breakdown, abstention sweep, cross-modality decomposition).
+    preds_path = os.path.join(cfg.results.metrics_dir,
+                              f"fusion_v2_predictions_{args.tag}.json")
+    with open(preds_path, "w", encoding="utf-8") as f:
+        json.dump(predictions_payload, f)
+    logger.info("Predictions -> %s", preds_path)
 
     tracker.log_results(**{f"{v}_f1": summary["variants"][v]["macro_f1"]
                            for v in summary["variants"]})

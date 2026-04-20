@@ -1,0 +1,123 @@
+#!/bin/bash
+#BSUB -J fusion-v2-abl
+#BSUB -o logs/fusion_v2_ablation_%J.out
+#BSUB -e logs/fusion_v2_ablation_%J.err
+#BSUB -W 2:00
+#BSUB -q gpu
+#BSUB -gpu "num=1"
+#BSUB -n 8
+#BSUB -M 24GB
+
+echo "========================================"
+echo "MMDA — Fusion v2 Ablation (2x2 weak/strong unimodal)"
+echo "  4 fusion heads x 4 feature pairs = 16 numbers"
+echo "========================================"
+echo "Job ID: $LSB_JOBID"
+echo "Host: $HOSTNAME"
+echo "Start: $(date)"
+
+module load python/3.11 2>/dev/null || module load python/3.9.6 2>/dev/null || module load python 2>/dev/null
+module load cuda/12.1 2>/dev/null || module load cuda/11.8 2>/dev/null || module load cuda 2>/dev/null
+
+if [ -f "$LS_SUBCWD/setup.py" ]; then
+    PROJECT_ROOT="$LS_SUBCWD"
+elif [ -f "$LS_SUBCWD/../setup.py" ]; then
+    PROJECT_ROOT="$(cd "$LS_SUBCWD/.." && pwd)"
+else
+    echo "ERROR: could not locate project root (setup.py) from LS_SUBCWD=$LS_SUBCWD" >&2
+    exit 2
+fi
+cd "$PROJECT_ROOT"
+mkdir -p logs
+source venv/bin/activate
+
+python -c "import torch; print(f'CUDA={torch.cuda.is_available()}')"
+
+GROUP=$(groups | cut -d' ' -f1)
+SCRATCH="/share/$GROUP/$USER"
+export MPLCONFIGDIR="$SCRATCH/tmp/matplotlib"
+export HF_HOME="$SCRATCH/.cache/huggingface"
+export TORCH_HOME="$SCRATCH/.cache/torch"
+export XDG_CACHE_HOME="$SCRATCH/.cache"
+mkdir -p "$MPLCONFIGDIR" "$HF_HOME" "$TORCH_HOME"
+export PYTHONUNBUFFERED=1
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+# ---------------------------------------------------------------------
+# Resolve the 4 feature files
+# ---------------------------------------------------------------------
+# VIS_GLOBAL   = oldest visual_features.pt (midterm global CLIP run)
+# VIS_PERCLAIM = newest visual_features.pt (per-claim retrieval run)
+# TXT_BASE     = midterm text features (no retriever tag)
+# TXT_LARGE    = most recent bm25-tagged text features (NLI-large run)
+
+VIS_GLOBAL=$(ls -tr results/runs/*/visual_features.pt 2>/dev/null | head -n 1)
+VIS_PERCLAIM=$(ls -t  results/runs/*/visual_features.pt 2>/dev/null | head -n 1)
+TXT_BASE=$(ls -t  results/runs/*/text_features_e2e.pt 2>/dev/null | head -n 1)
+TXT_LARGE=$(ls -t results/runs/*/text_features_bm25_e2e.pt 2>/dev/null | head -n 1)
+
+echo "VIS_GLOBAL   : $VIS_GLOBAL"
+echo "VIS_PERCLAIM : $VIS_PERCLAIM"
+echo "TXT_BASE     : $TXT_BASE"
+echo "TXT_LARGE    : $TXT_LARGE"
+
+for f in "$VIS_GLOBAL" "$VIS_PERCLAIM" "$TXT_BASE" "$TXT_LARGE"; do
+    if [ -z "$f" ] || [ ! -s "$f" ]; then
+        echo "ERROR: missing feature file — cannot run full ablation" >&2
+        exit 2
+    fi
+done
+
+# Guard: VIS_GLOBAL and VIS_PERCLAIM must be distinct paths (i.e., two
+# different runs exist). Otherwise the ablation collapses.
+if [ "$VIS_GLOBAL" = "$VIS_PERCLAIM" ]; then
+    echo "ERROR: only one visual_features.pt run directory found. Need both" >&2
+    echo "       a midterm-global run and a per-claim run. Got: $VIS_GLOBAL" >&2
+    exit 2
+fi
+
+# ---------------------------------------------------------------------
+# Run fusion v2 for each of the 4 cells
+# ---------------------------------------------------------------------
+run_cell () {
+    local tag="$1"; local vis="$2"; local txt="$3"
+    echo ""
+    echo "================================================================"
+    echo "CELL: $tag"
+    echo "  visual: $vis"
+    echo "  text:   $txt"
+    echo "================================================================"
+    python scripts/run_fusion_v2.py \
+        --config configs/default.yaml \
+        --visual-features "$vis" \
+        --visual-mode e2e \
+        --text-features "$txt" \
+        --tag "$tag" \
+        --variants "score,gated,cross_attn,confidence"
+}
+
+run_cell "visGlobal_txtBase"    "$VIS_GLOBAL"   "$TXT_BASE"
+run_cell "visPerClaim_txtBase"  "$VIS_PERCLAIM" "$TXT_BASE"
+run_cell "visGlobal_txtLarge"   "$VIS_GLOBAL"   "$TXT_LARGE"
+run_cell "visPerClaim_txtLarge" "$VIS_PERCLAIM" "$TXT_LARGE"
+
+# ---------------------------------------------------------------------
+# Post-hoc analysis across all 4 tags
+# ---------------------------------------------------------------------
+echo ""
+echo "================================================================"
+echo "POST-HOC: bootstrap CIs + per-type + abstention + cross-modality"
+echo "================================================================"
+python scripts/post_hoc_fusion_v2.py \
+    results/metrics/fusion_v2_predictions_visGlobal_txtBase.json \
+    results/metrics/fusion_v2_predictions_visPerClaim_txtBase.json \
+    results/metrics/fusion_v2_predictions_visGlobal_txtLarge.json \
+    results/metrics/fusion_v2_predictions_visPerClaim_txtLarge.json \
+    --n-boot 1000 \
+    --out-dir results/metrics
+
+EXIT_CODE=$?
+echo ""
+echo "Ablation complete. Exit: $EXIT_CODE — $(date)"
+exit $EXIT_CODE
