@@ -212,3 +212,5 @@ logs/
 _archive/
 venv/
 explanation.md
+
+/graphify-out/
