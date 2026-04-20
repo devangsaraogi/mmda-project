@@ -1,0 +1,84 @@
+#!/bin/bash
+#BSUB -J fusion-v2
+#BSUB -o logs/fusion_v2_%J.out
+#BSUB -e logs/fusion_v2_%J.err
+#BSUB -W 2:00
+#BSUB -q gpu
+#BSUB -gpu "num=1"
+#BSUB -n 8
+#BSUB -M 24GB
+
+echo "========================================"
+echo "MMDA — Fusion v2: score / gated / cross_attn / confidence"
+echo "  over upgraded unimodal features (per-claim visual + DeBERTa-large text)"
+echo "========================================"
+echo "Job ID: $LSB_JOBID"
+echo "Host: $HOSTNAME"
+echo "Start: $(date)"
+
+module load python/3.11 2>/dev/null || module load python/3.9.6 2>/dev/null || module load python 2>/dev/null
+module load cuda/12.1 2>/dev/null || module load cuda/11.8 2>/dev/null || module load cuda 2>/dev/null
+
+# Project-root detection (robust to submitting from mmda-project/ or lsf/).
+if [ -f "$LS_SUBCWD/setup.py" ]; then
+    PROJECT_ROOT="$LS_SUBCWD"
+elif [ -f "$LS_SUBCWD/../setup.py" ]; then
+    PROJECT_ROOT="$(cd "$LS_SUBCWD/.." && pwd)"
+else
+    echo "ERROR: could not locate project root (setup.py) from LS_SUBCWD=$LS_SUBCWD" >&2
+    exit 2
+fi
+cd "$PROJECT_ROOT"
+mkdir -p logs
+source venv/bin/activate
+echo "Python: $(python --version)"
+echo "PWD: $(pwd)"
+
+python -c "import torch; print(f'CUDA={torch.cuda.is_available()}')"
+
+GROUP=$(groups | cut -d' ' -f1)
+SCRATCH="/share/$GROUP/$USER"
+export MPLCONFIGDIR="$SCRATCH/tmp/matplotlib"
+export HF_HOME="$SCRATCH/.cache/huggingface"
+export TORCH_HOME="$SCRATCH/.cache/torch"
+export XDG_CACHE_HOME="$SCRATCH/.cache"
+mkdir -p "$MPLCONFIGDIR" "$HF_HOME" "$TORCH_HOME"
+export PYTHONUNBUFFERED=1
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+# Resolve the most recent feature caches. Override on the CLI if you want
+# a specific run. Structure:
+#   results/runs/<run_id>/visual_features_<mode>.pt
+#   results/runs/<run_id>/text_features_<retriever>_<mode>.pt
+#
+# We pick:
+#   VISUAL = latest per-claim E2E visual features
+#   TEXT   = latest DeBERTa-large NLI E2E text features  (retriever=bm25 is
+#            fine — NLI scale is what matters here)
+VIS=$(ls -t results/runs/*/visual_features_e2e.pt 2>/dev/null | head -n 1)
+TXT=$(ls -t results/runs/*/text_features_bm25_e2e.pt 2>/dev/null | head -n 1)
+
+if [ -z "$VIS" ] || [ ! -s "$VIS" ]; then
+    echo "ERROR: no visual_features_e2e.pt under results/runs/*/" >&2
+    exit 2
+fi
+if [ -z "$TXT" ] || [ ! -s "$TXT" ]; then
+    echo "ERROR: no text_features_bm25_e2e.pt under results/runs/*/" >&2
+    echo "       Need a run of text_pipeline with DeBERTa-large + --retriever bm25." >&2
+    exit 2
+fi
+
+echo "VISUAL features: $VIS"
+echo "TEXT   features: $TXT"
+
+python scripts/run_fusion_v2.py \
+    --config configs/default.yaml \
+    --visual-features "$VIS" \
+    --text-features "$TXT" \
+    --tag "visE2E_txtE2E_large" \
+    --variants "score,gated,cross_attn,confidence"
+
+EXIT_CODE=$?
+echo "Exit: $EXIT_CODE — $(date)"
+exit $EXIT_CODE
