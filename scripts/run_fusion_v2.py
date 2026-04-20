@@ -63,8 +63,29 @@ logger = logging.getLogger(__name__)
 # ----------------------------------------------------------------------
 # Feature loading + alignment
 # ----------------------------------------------------------------------
-def load_feature_pt(path: str) -> dict:
+def load_feature_pt(path: str, mode: str | None = None) -> dict:
+    """Load a feature cache .pt file.
+
+    Two on-disk shapes are supported:
+
+      (a) Text pipeline (one file per mode):
+              {"train": {...}, "val": {...}, "test": {...}}
+
+      (b) Multimodal pipeline visual features (both modes in one file):
+              {"oracle": {"train":..., "val":..., "test":...},
+               "e2e":    {"train":..., "val":..., "test":...}}
+
+    For shape (b), ``mode`` must be "oracle" or "e2e" to select which
+    inner dict to return.
+    """
     data = torch.load(path, weights_only=False)
+    if "oracle" in data or "e2e" in data:  # shape (b)
+        if mode not in data:
+            raise ValueError(
+                f"{path} has oracle/e2e layers; pass mode='oracle' or 'e2e' "
+                f"to pick one (available keys: {list(data.keys())})"
+            )
+        data = data[mode]
     for split in ("train", "val", "test"):
         if split not in data:
             raise KeyError(f"{path} missing split '{split}'")
@@ -237,7 +258,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", type=str, default=None)
     ap.add_argument("--visual-features", type=str, required=True,
-                    help="Path to visual_features_<mode>.pt")
+                    help="Path to visual_features.pt (or visual_features_<mode>.pt).")
+    ap.add_argument("--visual-mode", type=str, default="e2e",
+                    choices=["oracle", "e2e"],
+                    help="Which inner mode to select if the visual file has both.")
     ap.add_argument("--text-features", type=str, required=True,
                     help="Path to text_features_<retriever>_<mode>.pt")
     ap.add_argument("--tag", type=str, required=True,
@@ -259,8 +283,9 @@ def main():
     logger.info("Device: %s", device)
 
     # Load + align
-    logger.info("Loading visual features from %s", args.visual_features)
-    visual = load_feature_pt(args.visual_features)
+    logger.info("Loading visual features from %s (mode=%s)",
+                args.visual_features, args.visual_mode)
+    visual = load_feature_pt(args.visual_features, mode=args.visual_mode)
     logger.info("Loading text features from %s", args.text_features)
     text = load_feature_pt(args.text_features)
     aligned = align_features(visual, text)
